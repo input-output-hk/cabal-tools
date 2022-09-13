@@ -49,10 +49,7 @@ main = execParser opts >>= doMain
     opts =
       info
         (optionsParser <**> helper)
-        ( fullDesc
-            <> progDesc "Print a greeting for TARGET"
-            <> header "hello - a test for optparse-applicative"
-        )
+        (fullDesc <> progDesc "Extracts a cabal install plan")
 
 data Options = Options
   { verbosity :: Verbosity,
