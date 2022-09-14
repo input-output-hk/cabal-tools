@@ -1,5 +1,7 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE NamedFieldPuns #-}
 
+import Control.Monad (join)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Foldable (for_)
 import Distribution.Client.Config (getCabalDir)
@@ -30,35 +32,29 @@ import qualified Distribution.Verbosity as Verbosity
 import Options.Applicative
 import System.FilePath ((<.>), (</>))
 
-optionsParser :: Parser Options
-optionsParser =
-  Options
-    <$> option
-      (eitherReader eitherParsec)
-      ( long "verbosity"
-          <> metavar "VERBOSITY"
-          <> value Verbosity.normal
-          <> help "Verbosity"
-      )
-    <*> optional (argument str (metavar "INPUT-DIR"))
-    <*> argument str (metavar "OUTPUT-DIR" <> value "./out")
-
 main :: IO ()
-main = execParser opts >>= doMain
-  where
-    opts =
+main =
+  join $
+    execParser $
       info
         (optionsParser <**> helper)
         (fullDesc <> progDesc "Extracts a cabal install plan")
+  where
+    optionsParser = do
+      verbosity <-
+        option
+          (eitherReader eitherParsec)
+          ( long "verbosity"
+              <> metavar "VERBOSITY"
+              <> value Verbosity.normal
+              <> help "Verbosity"
+          )
+      inputDir <- optional (argument str (metavar "INPUT-DIR"))
+      outputDir <- argument str (metavar "OUTPUT-DIR" <> value "./out")
+      pure $ doMain verbosity inputDir outputDir
 
-data Options = Options
-  { verbosity :: Verbosity,
-    inputDir :: Maybe FilePath,
-    outputDir :: FilePath
-  }
-
-doMain :: Options -> IO ()
-doMain Options {inputDir, outputDir, verbosity} = do
+doMain :: Verbosity -> Maybe FilePath -> [Char] -> IO ()
+doMain verbosity inputDir outputDir = do
   cabalDir <- getCabalDir
   let cabalDirLayout = defaultCabalDirLayout cabalDir
 
@@ -69,6 +65,8 @@ doMain Options {inputDir, outputDir, verbosity} = do
 
   (projectConfig, localPackages) <-
     rebuildProjectConfig
+      -- more verbose here to list the project files which have affected
+      -- the project configuration with no extra options
       (moreVerbose verbosity)
       httpTransport
       distDirLayout
