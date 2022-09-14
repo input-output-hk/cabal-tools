@@ -5,7 +5,6 @@
 
 module Main where
 
-import Control.Monad (when)
 import Data.Foldable (for_)
 import Distribution.Client.DistDirLayout
 import Distribution.Client.HttpUtils
@@ -13,9 +12,7 @@ import Distribution.Client.IndexUtils
 import Distribution.Client.ProjectConfig
 import Distribution.Client.ProjectPlanning
 import Distribution.Client.Types.SourcePackageDb
-import Distribution.Solver.Modular.Package
 import Distribution.Solver.Types.PackageIndex
-import Distribution.Solver.Types.SourcePackage
 import Distribution.Verbosity
 import Text.Pretty.Simple (pPrint)
 
@@ -52,8 +49,6 @@ main = do
 
   let SourcePackageDb {packageIndex} = sourcePkgDb
   for_ (allPackagesByName packageIndex) $
-    traverse $ \sp ->
-      when (pkgName (srcpkgPackageId sp) == "flat") $
-        pPrint sp
+    traverse pPrint
 
 deriving instance Show SourcePackageDb
