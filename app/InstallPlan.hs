@@ -1,38 +1,23 @@
 {-# LANGUAGE ApplicativeDo #-}
-{-# LANGUAGE NamedFieldPuns #-}
 
 import Control.Monad (join)
-import qualified Data.ByteString.Lazy as BSL
-import Data.Foldable (for_)
+import Debug.RecoverRTTI (anythingToString)
 import Distribution.Client.Config (getCabalDir)
 import Distribution.Client.DistDirLayout
-  ( DistDirLayout (distProjectCacheDirectory, distProjectCacheFile),
-    defaultCabalDirLayout,
+  ( defaultCabalDirLayout,
     defaultDistDirLayout,
   )
 import Distribution.Client.HttpUtils (configureTransport)
-import qualified Distribution.Client.InstallPlan as InstallPlan
 import Distribution.Client.ProjectConfig (findProjectRoot)
-import Distribution.Client.ProjectPlanOutput (writePlanExternalRepresentation)
 import Distribution.Client.ProjectPlanning
-  ( ElaboratedConfiguredPackage
-      ( ElaboratedConfiguredPackage,
-        elabLocalToProject,
-        elabPkgDescriptionOverride,
-        elabPkgSourceId
-      ),
-    rebuildInstallPlan,
+  ( rebuildInstallPlan,
     rebuildProjectConfig,
   )
-import Distribution.Package (pkgName)
 import Distribution.Parsec (eitherParsec)
-import Distribution.Pretty (prettyShow)
-import qualified Distribution.Simple.Utils as Cabal
 import Distribution.Verbosity (Verbosity, moreVerbose)
 import qualified Distribution.Verbosity as Verbosity
 import Options.Applicative
-import System.Directory (removeDirectoryRecursive, renameFile)
-import System.FilePath ((<.>), (</>))
+import Text.Pretty.Simple (pPrintString)
 
 main :: IO ()
 main =
@@ -82,22 +67,6 @@ doMain verbosity inputDir outputDir = do
   (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
     rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
 
-  putStrLn $ "Writing detailed plan to " ++ outputDir
+  pPrintString $ anythingToString elaboratedPlan
 
-  writePlanExternalRepresentation distDirLayout elaboratedPlan elaboratedSharedConfig
-
-  -- tidy up, move plan.json to outputDir and delete cabal cache
-  renameFile (distProjectCacheFile distDirLayout "plan.json") (outputDir </> "plan.json")
-  removeDirectoryRecursive (distProjectCacheDirectory distDirLayout)
-
-  let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
-
-  for_ ecps $
-    \ElaboratedConfiguredPackage
-       { elabPkgSourceId,
-         elabPkgDescriptionOverride
-       } -> do
-        let pkgFile = outputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
-        for_ elabPkgDescriptionOverride $ \pkgTxt -> do
-          Cabal.info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
-          BSL.writeFile pkgFile pkgTxt
+  pPrintString $ anythingToString elaboratedSharedConfig
