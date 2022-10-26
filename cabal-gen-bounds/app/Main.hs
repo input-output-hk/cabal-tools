@@ -11,15 +11,11 @@ import Distribution.Client.ProjectOrchestration
 import Distribution.Client.ProjectPlanning
 import Distribution.Client.Types.PackageLocation
 import Distribution.Client.Types.PackageSpecifier
-import Distribution.Compat.Lens
-import Distribution.Package
-  ( packageName,
-    packageVersion,
-  )
+import Distribution.Package (packageName, packageVersion)
 import Distribution.PackageDescription
+import Distribution.PackageDescription.Configuration (transformAllBuildDepends)
 import Distribution.PackageDescription.PrettyPrint
 import Distribution.Solver.Types.SourcePackage
-import Distribution.Types.GenericPackageDescription.Lens
 import qualified Distribution.Verbosity as Verbosity
 import Distribution.Version hiding (hasLowerBound)
 import System.FilePath
@@ -28,14 +24,14 @@ import Prelude ()
 main :: IO ()
 main = do
   let verbosity = Verbosity.normal
-      cliConfig = mempty -- ¯\_(ツ)_/¯
+
   ProjectBaseContext
     { distDirLayout,
       cabalDirLayout,
       projectConfig,
       localPackages
     } <-
-    establishProjectBaseContext verbosity cliConfig OtherCommand
+    establishProjectBaseContext verbosity mempty OtherCommand
 
   (_, elaboratedPlan, _, _, _) <-
     rebuildInstallPlan
@@ -64,11 +60,11 @@ main = do
     SpecificSourcePackage SourcePackage {srcpkgPackageId, srcpkgSource = LocalUnpackedPackage pkgPath, srcpkgDescription, srcpkgDescrOverride = Nothing} -> do
       let PackageIdentifier {pkgName} = srcpkgPackageId
 
-      let fp = pkgPath </> unPackageName pkgName <.> "cabal.revised"
-      putStrLn $ "Writing " ++ fp ++ " for " ++ prettyShow srcpkgPackageId
+      let fp = pkgPath </> unPackageName pkgName <.> "cabal.improved"
+      let srcpkgDescription' = transformAllBuildDepends improveDepedency srcpkgDescription
 
-      writeGenericPackageDescription fp $
-        srcpkgDescription & (\f -> allCondTrees $ traverseCondTreeC f) %~ map improveDepedency
+      putStrLn $ "Writing " ++ fp
+      writeGenericPackageDescription fp srcpkgDescription'
     anyOtherCase ->
       putStrLn $ "Not handled" ++ show anyOtherCase
 
