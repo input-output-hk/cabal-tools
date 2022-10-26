@@ -20,7 +20,6 @@
               final.haskell-nix.hix.project {
                 src = ./.;
                 evalSystem = "x86_64-linux";
-                index-state = "2022-10-25T00:00:00Z";
               };
           })
         ];
@@ -28,7 +27,7 @@
         flake = pkgs.hixProject.flake {};
       in flake // {
         legacyPackages = pkgs;
-        packages.default = flake.packages."cabal-gen-bounds:exe:cabal-gen-bounds";
+        packages."cabal-gen-bounds" = flake.packages."cabal-gen-bounds:exe:cabal-gen-bounds";
       });
 
   # --- Flake Local Nix Configuration ----------------------------
