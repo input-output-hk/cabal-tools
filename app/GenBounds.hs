@@ -66,7 +66,7 @@ main = do
       putStrLn $ "Writing " ++ fp
       writeGenericPackageDescription fp srcpkgDescription'
     anyOtherCase ->
-      putStrLn $ "Not handled" ++ show anyOtherCase
+      putStrLn $ "Not handled: " ++ show anyOtherCase
 
 improveVersionRange :: VersionRange -> Version -> VersionRange
 improveVersionRange vr v =

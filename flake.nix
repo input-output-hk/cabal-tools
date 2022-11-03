@@ -27,7 +27,8 @@
         flake = pkgs.hixProject.flake {};
       in flake // {
         legacyPackages = pkgs;
-        packages."cabal-gen-bounds" = flake.packages."cabal-gen-bounds:exe:cabal-gen-bounds";
+        packages."cabal-gen-bounds" = flake.packages."cabal-tools:exe:cabal-gen-bounds";
+        packages."cabal-builder" = flake.packages."cabal-tools:exe:cabal-builder";
       });
 
   # --- Flake Local Nix Configuration ----------------------------

@@ -1,6 +1,8 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module Main where
@@ -15,6 +17,8 @@ import Distribution.Client.Types.SourcePackageDb
 import Distribution.Solver.Types.PackageIndex
 import Distribution.Verbosity
 import Text.Pretty.Simple (pPrint)
+import System.Environment (getArgs)
+import Distribution.Pretty (prettyShow)
 
 main :: IO ()
 main = do
@@ -47,8 +51,16 @@ main = do
         (solverSettingIndexState solverSettings)
         (solverSettingActiveRepos solverSettings)
 
+  args <- getArgs
+
   let SourcePackageDb {packageIndex} = sourcePkgDb
-  for_ (allPackagesByName packageIndex) $
-    traverse pPrint
+  case args of
+    [] -> do
+      for_ (allPackages packageIndex)
+        pPrint
+    s:_ -> do
+      for_ (searchByNameSubstring packageIndex s) $ \(pkgName, pkg) -> do
+        putStrLn $ prettyShow pkgName
+        pPrint pkg
 
 deriving instance Show SourcePackageDb

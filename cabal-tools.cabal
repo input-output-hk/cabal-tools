@@ -10,7 +10,7 @@ extra-doc-files: CHANGELOG.md
 common warnings
     ghc-options: -Wall
 
-executable install-plan
+executable cabal-install-plan
     import:           warnings
     main-is:          InstallPlan.hs
     build-depends:    base ^>=4.14.3.0
@@ -24,7 +24,7 @@ executable install-plan
     hs-source-dirs:   app
     default-language: Haskell2010
 
-executable project-config
+executable cabal-project-config
     import:           warnings
     main-is:          ProjectConfig.hs
     build-depends:    base ^>=4.14.3.0
@@ -38,16 +38,50 @@ executable project-config
     hs-source-dirs:   app
     default-language: Haskell2010
 
-executable available-packages
+executable cabal-builder
+    import:           warnings
+    main-is:          Builder.hs
+    build-depends:    base                 ^>= 4.14.3.0
+                    , aeson
+                    , Cabal                ^>= 3.8.0.0
+                    , Cabal-syntax         ^>= 3.8.0.0
+                    , cabal-install        ^>= 3.8.0.0
+                    , cabal-install-solver ^>= 3.8.0.0
+                    , containers
+                    , directory
+                    , optparse-applicative
+                    , prettyprinter
+                    , pretty-simple
+                    , process
+    hs-source-dirs:   app
+    default-language: Haskell2010
+
+
+executable cabal-available-packages
     import:           warnings
     main-is:          AvailablePackages.hs
     build-depends:    base ^>=4.14.3.0
                     , aeson
+                    , bytestring
                     , Cabal
                     , Cabal-syntax
                     , cabal-install
                     , cabal-install-solver
                     , prettyprinter
                     , pretty-simple
+                    , text
+    hs-source-dirs:   app
+    default-language: Haskell2010
+
+executable cabal-gen-bounds
+    import:           warnings
+    main-is:          GenBounds.hs
+    build-depends:    base                 ^>= 4.14.3.0
+                    , containers
+                    , filepath
+                    , Cabal                ^>= 3.8.0.0
+                    , cabal-install        ^>= 3.8.0.0
+                    , cabal-install-solver ^>= 3.8.0.0
+                    , Cabal-syntax         ^>= 3.8.0.0
     hs-source-dirs:   app
     default-language: Haskell2010
