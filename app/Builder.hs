@@ -110,9 +110,9 @@ build Args {argNamedPackages, argVerbosity, argDryRun, argConstraints} = do
 
   putStrLn "done."
 
-reportBuildTargetProblems :: Verbosity -> [TargetProblem'] -> IO a
-reportBuildTargetProblems verbosity =
-  reportTargetProblems verbosity "build"
+-- Copied the following from Distribution.Client.ProjectPlanning and
+-- modified to always rebuild (because cabal logic does not take cli config
+-- into account)
 
 establishProjectBaseContextWithRoot ::
   Verbosity ->
@@ -123,6 +123,7 @@ establishProjectBaseContextWithRoot ::
 establishProjectBaseContextWithRoot verbosity cliConfig projectRoot currentCommand = do
   cabalDir <- getCabalDir
 
+  let mdistDirectory = Setup.flagToMaybe (projectConfigDistDir $ projectConfigShared cliConfig)
   let distDirLayout = defaultDistDirLayout projectRoot mdistDirectory
 
   httpTransport <-
@@ -138,28 +139,13 @@ establishProjectBaseContextWithRoot verbosity cliConfig projectRoot currentComma
       distDirLayout
       cliConfig
 
-  let ProjectConfigBuildOnly
-        { projectConfigLogsDir
-        } = projectConfigBuildOnly projectConfig
+  let mlogsDir = Setup.flagToMaybe (projectConfigLogsDir $ projectConfigBuildOnly projectConfig)
 
-      ProjectConfigShared
-        { projectConfigStoreDir
-        } = projectConfigShared projectConfig
-
-      mlogsDir = Setup.flagToMaybe projectConfigLogsDir
-
-  mstoreDir <-
-    sequenceA $
-      makeAbsolute
-        <$> Setup.flagToMaybe projectConfigStoreDir
+  mstoreDir <- traverse makeAbsolute $ Setup.flagToMaybe (projectConfigStoreDir $ projectConfigShared projectConfig)
 
   let cabalDirLayout = mkCabalDirLayout cabalDir mstoreDir mlogsDir
 
-  let buildSettings =
-        resolveBuildTimeSettings
-          verbosity
-          cabalDirLayout
-          projectConfig
+  let buildSettings = resolveBuildTimeSettings verbosity cabalDirLayout projectConfig
 
   return
     ProjectBaseContext
@@ -170,9 +156,6 @@ establishProjectBaseContextWithRoot verbosity cliConfig projectRoot currentComma
         buildSettings,
         currentCommand
       }
-  where
-    mdistDirectory = Setup.flagToMaybe projectConfigDistDir
-    ProjectConfigShared {projectConfigDistDir} = projectConfigShared cliConfig
 
 rebuildProjectConfig ::
   Verbosity ->
@@ -238,3 +221,7 @@ readLocalPackages verbosity distDirLayout projectConfig = do
     (projectConfigShared projectConfig)
     (projectConfigBuildOnly projectConfig)
     pkgLocations
+
+reportBuildTargetProblems :: Verbosity -> [TargetProblem'] -> IO a
+reportBuildTargetProblems verbosity =
+  reportTargetProblems verbosity "build"

@@ -4,27 +4,14 @@
 import Control.Monad (join)
 import qualified Data.ByteString.Lazy as BSL
 import Data.Foldable (for_)
-import Distribution.Client.Config (getCabalDir)
+import Distribution.Client.Config
 import Distribution.Client.DistDirLayout
-  ( DistDirLayout (distProjectCacheDirectory, distProjectCacheFile),
-    defaultCabalDirLayout,
-    defaultDistDirLayout,
-  )
-import Distribution.Client.HttpUtils (configureTransport)
+import Distribution.Client.HttpUtils
 import qualified Distribution.Client.InstallPlan as InstallPlan
-import Distribution.Client.ProjectConfig (findProjectRoot)
-import Distribution.Client.ProjectPlanOutput (writePlanExternalRepresentation)
+import Distribution.Client.ProjectConfig
+import Distribution.Client.ProjectPlanOutput
 import Distribution.Client.ProjectPlanning
-  ( ElaboratedConfiguredPackage
-      ( ElaboratedConfiguredPackage,
-        elabLocalToProject,
-        elabPkgDescriptionOverride,
-        elabPkgSourceId
-      ),
-    rebuildInstallPlan,
-    rebuildProjectConfig,
-  )
-import Distribution.Package (pkgName)
+import Distribution.Package
 import Distribution.Parsec (eitherParsec)
 import Distribution.Pretty (prettyShow)
 import qualified Distribution.Simple.Utils as Cabal
@@ -38,7 +25,7 @@ main :: IO ()
 main =
   join $
     execParser $
-      info
+      Options.Applicative.info
         (optionsParser <**> helper)
         (fullDesc <> progDesc "Extracts a cabal install plan")
   where
