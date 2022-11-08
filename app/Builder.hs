@@ -64,7 +64,7 @@ main = do
       info
         (argsParser <**> helper)
         ( fullDesc
-            <> progDesc "Builds a pacakge"
+            <> progDesc "Builds a package"
             <> header "hello - a busy package builder"
         )
 
