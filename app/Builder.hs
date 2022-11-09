@@ -3,7 +3,7 @@
 
 import Control.Exception
 import Control.Monad.IO.Class
-import Data.Foldable (toList)
+import Data.Foldable (toList, for_)
 import qualified Distribution.Client.CmdBuild as CmdBuild
 import Distribution.Client.CmdErrorMessages
 import Distribution.Client.Config
@@ -34,7 +34,9 @@ import qualified Distribution.Verbosity as Verbosity
 import Options.Applicative
 import System.Environment (getArgs)
 import System.Process (callProcess)
-import Text.Pretty.Simple (pPrint)
+import Distribution.Pretty (prettyShow)
+import Data.List (intercalate)
+import qualified Data.Map.Strict as Map
 
 data Args = Args
   { argNamedPackages :: [PackageVersionConstraint],
@@ -87,8 +89,6 @@ build Args {argNamedPackages, argVerbosity, argDryRun, argConstraints} = do
   buildCtx <- runProjectPreBuildPhase argVerbosity baseCtx $ \elaboratedPlan -> do
     let targetSelectors = [TargetPackageNamed pkgName Nothing | PackageVersionConstraint pkgName _ <- argNamedPackages]
 
-    pPrint targetSelectors
-
     targets <-
       either (reportBuildTargetProblems argVerbosity) return $
         resolveTargets
@@ -98,7 +98,10 @@ build Args {argNamedPackages, argVerbosity, argDryRun, argConstraints} = do
           Nothing
           targetSelectors
 
-    pPrint targets
+    for_ (Map.toList targets) $ \(unitId, cts) ->
+      putStrLn $
+        prettyShow unitId <> " " <>
+        intercalate "," [ prettyShow cn <> " " <> show sct <> ", selected by: " ++ intercalate "," (map showTargetSelector $ toList ts) | (ComponentTarget cn sct, ts) <- cts ]
 
     return (elaboratedPlan, targets)
 
