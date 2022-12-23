@@ -32,7 +32,7 @@ main = do
 
       putStrLn "-------------------- localPackages --------------------"
       print localPackages
-      
+
       putStrLn "-------------------- progSearchPath --------------------"
       print progSearchPath
 
