@@ -30,7 +30,7 @@ import System.IO
 
 main :: IO ()
 main = do
-  withCacheFile "dist-newstyle/cache/elaborated-plan" $ \case
+  withElaboratedPlanCacheFile "dist-newstyle/cache/elaborated-plan" $ \case
     Left err -> print err
     Right (_monitorStateFileSet, k, Left err) -> do
       print k
@@ -48,7 +48,7 @@ main = do
                   component <- pkgComponents elabPkgDescription
                   Dependency pkgName versionRange _libraryNames <- targetBuildDepends $ componentBuildInfo component
                   let maxUpperBound = maximum $ map (\(VersionInterval _lb ub) -> UpperBound'Ord ub) $ asVersionIntervals versionRange
-                  return (pkgName, [(maxUpperBound, (elabPkgSourceId, component))])
+                  return (pkgName, [(maxUpperBound, (elabPkgSourceId, componentName component))])
               )
               planPackage
 
@@ -63,8 +63,12 @@ main = do
                 : [ unwords
                       [ "\t",
                         prettyShow pkgId,
-                        "components:",
-                        intercalate ", " (map (showComponentName . componentName) components)
+                        concat
+                          [ "(",
+                            -- intercalate ", " (map (showComponentName . componentName) components),
+                            intercalate ", " (map prettyShow components),
+                            ")"
+                          ]
                       ]
                     | (pkgId, components) <- componentMap
                   ]
@@ -111,10 +115,6 @@ instance Ord UpperBound'Ord where
         (InclusiveBound, ExclusiveBound) -> GT
         _otherwise -> EQ
 
-type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
-
-type Value = (ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
-
 withCacheFile ::
   (Binary a, Structured a, Binary b, Structured b) =>
   FilePath ->
@@ -124,6 +124,13 @@ withCacheFile cacheFile k =
   withBinaryFile cacheFile ReadMode $ \hnd -> do
     contents <- structuredDecodeTriple <$> BS.hGetContents hnd
     k contents
+
+type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
+
+type Value = (ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
+
+withElaboratedPlanCacheFile :: FilePath -> (Either String (MonitorStateFileSet, Key, Either String Value) -> IO r) -> IO r
+withElaboratedPlanCacheFile = withCacheFile
 
 structuredDecodeTriple ::
   forall a b c.
