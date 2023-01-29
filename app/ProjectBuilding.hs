@@ -9,7 +9,6 @@ module ProjectBuilding where
 -- TODO: [code cleanup] eliminate
 -- TODO: [code cleanup] eliminate
 
-import Control.Exception (assert)
 import Control.Monad (unless)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -21,13 +20,15 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, mapMaybe, maybeToList)
 import Data.Traversable (for)
 import Distribution.Client.DistDirLayout
-import Distribution.Client.JobControl
 import Distribution.Client.PackageHash
+import Distribution.Client.ProjectBuilding.Types (BuildResult (..))
 import Distribution.Client.ProjectPlanning hiding (setupHsBuildFlags, setupHsConfigureArgs, setupHsConfigureFlags, setupHsCopyFlags, setupHsHaddockFlags, setupHsRegisterFlags)
 import Distribution.Client.ProjectPlanning.Types as Ty
 import Distribution.Client.Setup hiding (buildCommand, cabalVersion, configureCommand, haddockCommand, packageName)
 import Distribution.Client.Store
-import Distribution.Client.Types
+import Distribution.Client.Types (TestsResult (..))
+import Distribution.Client.Types.BuildResults (DocsResult (..))
+import Distribution.Client.Types.ConfiguredId (ConfiguredId (..))
 import Distribution.Compat.Directory (listDirectory)
 import Distribution.Compat.Lens ((^.))
 import Distribution.InstalledPackageInfo (InstalledPackageInfo)
@@ -39,14 +40,11 @@ import Distribution.Simple.Compiler
 import Distribution.Simple.Flag
 import Distribution.Simple.InstallDirs qualified as InstallDirs
 import Distribution.Simple.Program
-import Distribution.Simple.Register qualified as Cabal
 import Distribution.Simple.Setup qualified as Cabal
 import Distribution.Simple.Utils
 import Distribution.Solver.Types.OptionalStanza
 import Distribution.Types.ComponentName
-import Distribution.Types.GivenComponent
-  ( GivenComponent (..),
-  )
+import Distribution.Types.GivenComponent (GivenComponent (..))
 import Distribution.Types.LibraryName
 import Distribution.Types.PackageDescription.Lens (componentModules)
 import Distribution.Types.PackageVersionConstraint
@@ -58,21 +56,19 @@ import System.FilePath
 
 buildAndInstallUnpackedPackage ::
   Verbosity ->
-  DistDirLayout ->
   StoreDirLayout ->
-  Lock ->
   ElaboratedSharedConfig ->
   ElaboratedConfiguredPackage ->
   FilePath ->
-  IO NewStoreEntryOutcome
+  Maybe FilePath ->
+  IO BuildResult
 buildAndInstallUnpackedPackage
   verbosity
-  DistDirLayout {distTempDirectory}
-  storeDirLayout@StoreDirLayout {storePackageDBStack}
-  registerLock
-  pkgshared@ElaboratedSharedConfig {pkgConfigCompiler = compiler, pkgConfigCompilerProgs = progdb}
+  storeDirLayout
+  pkgshared@ElaboratedSharedConfig {pkgConfigCompiler = compiler}
   pkg
-  builddir = do
+  builddir
+  mlogFile = do
     -- Configure phase
     setup' configureCommand configureFlags configureArgs
 
@@ -144,37 +140,49 @@ buildAndInstallUnpackedPackage
         registerPkg
           | not (elabRequiresRegistration pkg) =
               debug verbosity $ "registerPkg: elab does NOT require registration for " ++ prettyShow uid
-          | otherwise = do
-              -- We register ourselves rather than via Setup.hs. We need to
-              -- grab and modify the InstalledPackageInfo. We decide what
-              -- the installed package id is, not the build system.
-              ipkg0 <- generateInstalledPackageInfo
-              let ipkg = ipkg0 {Installed.installedUnitId = uid}
-              assert
-                ( elabRegisterPackageDBStack pkg
-                    == storePackageDBStack compid
-                )
-                (return ())
-              criticalSection registerLock $
-                Cabal.registerPackage
-                  verbosity
-                  compiler
-                  progdb
-                  (storePackageDBStack compid)
-                  ipkg
-                  Cabal.defaultRegisterOptions
-                    { Cabal.registerMultiInstance = True,
-                      Cabal.registerSuppressFilesCheck = True
-                    }
+          | otherwise =
+              info verbosity $ "register " ++ prettyShow uid
+    --              -- We register ourselves rather than via Setup.hs. We need to
+    --              -- grab and modify the InstalledPackageInfo. We decide what
+    --              -- the installed package id is, not the build system.
+    --              ipkg0 <- generateInstalledPackageInfo
+    --              let ipkg = ipkg0 {Installed.installedUnitId = uid}
+    --              assert
+    --                ( elabRegisterPackageDBStack pkg
+    --                    == storePackageDBStack compid
+    --                )
+    --                (return ())
+    --              criticalSection registerLock $
+    --                Cabal.registerPackage
+    --                  verbosity
+    --                  compiler
+    --                  progdb
+    --                  (storePackageDBStack compid)
+    --                  ipkg
+    --                  Cabal.defaultRegisterOptions
+    --                    { Cabal.registerMultiInstance = True,
+    --                      Cabal.registerSuppressFilesCheck = True
+    --                    }
 
     -- Actual installation
-    newStoreEntry
-      verbosity
-      storeDirLayout
-      compid
-      uid
-      copyPkgFiles
-      registerPkg
+    newStoreEntry verbosity storeDirLayout compid uid copyPkgFiles registerPkg >>= print
+
+    -- TODO: [nice to have] we currently rely on Setup.hs copy to do the right
+    -- thing. Although we do copy into an image dir and do the move into the
+    -- final location ourselves, perhaps we ought to do some sanity checks on
+    -- the image dir first.
+
+    -- TODO: [required eventually] note that for nix-style
+    -- installations it is not necessary to do the
+    -- 'withWin32SelfUpgrade' dance, but it would be necessary for a
+    -- shared bin dir.
+
+    return
+      BuildResult
+        { buildResultDocs = DocsNotTried,
+          buildResultTests = TestsNotTried,
+          buildResultLogFile = mlogFile
+        }
     where
       uid = installedUnitId pkg
 
@@ -213,20 +221,20 @@ buildAndInstallUnpackedPackage
           verbosity
           builddir
 
-      generateInstalledPackageInfo :: IO InstalledPackageInfo
-      generateInstalledPackageInfo =
-        withTempInstalledPackageInfoFile
-          verbosity
-          distTempDirectory
-          $ \pkgConfDest -> do
-            let registerFlags =
-                  setupHsRegisterFlags
-                    pkg
-                    pkgshared
-                    verbosity
-                    builddir
-                    pkgConfDest
-            setup Cabal.registerCommand registerFlags
+      -- generateInstalledPackageInfo :: IO InstalledPackageInfo
+      -- generateInstalledPackageInfo =
+      --  withTempInstalledPackageInfoFile
+      --    verbosity
+      --    distTempDirectory
+      --    $ \pkgConfDest -> do
+      --      let registerFlags =
+      --            setupHsRegisterFlags
+      --              pkg
+      --              pkgshared
+      --              verbosity
+      --              builddir
+      --              pkgConfDest
+      --      setup Cabal.registerCommand registerFlags
 
       copyFlags destdir =
         setupHsCopyFlags

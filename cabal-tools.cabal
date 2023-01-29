@@ -37,23 +37,28 @@ executable cabal-project-config
                     , cabal-install-solver
                     , prettyprinter
                     , pretty-simple
+                    , pretty-show
     hs-source-dirs:   app
     default-language: Haskell2010
 
 executable cabal-builder
     import:           warnings
     main-is:          Builder.hs
+    other-modules:    ProjectBuilding
     build-depends:    base                  >= 4.14.3.0
                     , aeson
+                    , bytestring
                     , Cabal                ^>= 3.8.0.0
                     , Cabal-syntax         ^>= 3.8.0.0
                     , cabal-install        ^>= 3.8.0.0
                     , cabal-install-solver ^>= 3.8.0.0
                     , containers
                     , directory
+                    , filepath
                     , optparse-applicative
                     , prettyprinter
                     , process
+                    , tar
     hs-source-dirs:   app
     default-language: Haskell2010
 
@@ -117,18 +122,18 @@ executable cabal-active-bounds
     hs-source-dirs:   app
     default-language: Haskell2010
 
-executable cabal-project-building
-    import:           warnings
-    main-is:          ProjectBuilding.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , binary
-                    , bytestring
-                    , containers
-                    , directory
-                    , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
-    hs-source-dirs:   app
-    default-language: Haskell2010
+-- executable cabal-project-building
+--     import:           warnings
+--     main-is:          ProjectBuilding.hs
+--     build-depends:    base                  >= 4.14.3.0
+--                     , binary
+--                     , bytestring
+--                     , containers
+--                     , directory
+--                     , filepath
+--                     , Cabal                ^>= 3.8.0.0
+--                     , cabal-install        ^>= 3.8.0.0
+--                     , cabal-install-solver ^>= 3.8.0.0
+--                     , Cabal-syntax         ^>= 3.8.0.0
+--     hs-source-dirs:   app
+--     default-language: Haskell2010
