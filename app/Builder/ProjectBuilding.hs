@@ -4,10 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module ProjectBuilding where
-
--- TODO: [code cleanup] eliminate
--- TODO: [code cleanup] eliminate
+module Builder.ProjectBuilding where
 
 import Control.Monad (unless)
 import Data.ByteString qualified as BS

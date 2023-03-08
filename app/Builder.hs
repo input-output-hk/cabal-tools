@@ -5,6 +5,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 
+import Builder.ProjectBuilding (buildAndInstallUnpackedPackage)
 import Control.Exception
 import Control.Monad (unless, void, when)
 import Control.Monad.IO.Class
@@ -52,7 +53,6 @@ import Distribution.Utils.NubList
 import Distribution.Verbosity (Verbosity)
 import Distribution.Verbosity qualified as Verbosity
 import Options.Applicative qualified as Opt
-import ProjectBuilding (buildAndInstallUnpackedPackage)
 import System.Directory (doesDirectoryExist, renameDirectory)
 import System.Environment (getArgs)
 import System.FilePath
