@@ -10,21 +10,45 @@ extra-doc-files: CHANGELOG.md
 common warnings
     ghc-options: -Wall
 
+library
+    exposed-modules:  My.Client.ProjectPlanning
+    build-depends:    base                  >= 4.14.3.0
+                    , bytestring
+                    , Cabal                ^>= 3.8.0.0
+                    , cabal-install        ^>= 3.8.0.0
+                    , cabal-install-solver ^>= 3.8.0.0
+                    , Cabal-syntax         ^>= 3.8.0.0
+                    , containers
+                    , directory
+                    , filepath
+                    , hackage-security
+                    , mtl
+                    , optparse-applicative
+                    , pretty
+    hs-source-dirs:   src
+    default-language: GHC2021
+    other-extensions: ImportQualifiedPost
+
 executable cabal-install-plan
     import:           warnings
     main-is:          InstallPlan.hs
     build-depends:    base                  >= 4.14.3.0
+                    , cabal-tools
                     , bytestring
+                    , Cabal                ^>= 3.8.0.0
+                    , cabal-install        ^>= 3.8.0.0
+                    , cabal-install-solver ^>= 3.8.0.0
+                    , Cabal-syntax         ^>= 3.8.0.0
                     , containers
                     , directory
                     , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
+                    , hackage-security
+                    , mtl
                     , optparse-applicative
+                    , pretty
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
+    other-extensions: ImportQualifiedPost
 
 executable cabal-project-config
     import:           warnings
