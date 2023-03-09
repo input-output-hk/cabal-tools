@@ -1,5 +1,3 @@
-{-# LANGUAGE MultiWayIf #-}
-
 module My.ProjectPlanning where
 
 import Control.Exception (assert)
@@ -115,6 +113,7 @@ import Distribution.Simple.Setup
     toFlag,
   )
 import Distribution.Simple.Setup qualified as Cabal
+import Distribution.Simple.Test.Log (PackageLog (platform))
 import Distribution.Simple.Utils qualified as Cabal
 import Distribution.Solver.Types.ComponentDeps (ComponentDeps)
 import Distribution.Solver.Types.OptionalStanza
@@ -134,8 +133,7 @@ import Text.PrettyPrint qualified as Disp
 rebuildProjectConfig ::
   Verbosity ->
   Compiler ->
-  Arch ->
-  OS ->
+  Platform ->
   HttpTransport ->
   DistDirLayout ->
   Flag Bool ->
@@ -147,8 +145,7 @@ rebuildProjectConfig ::
 rebuildProjectConfig
   verbosity
   compiler
-  arch
-  os
+  platform@(Platform arch os)
   httpTransport
   distDirLayout@DistDirLayout {distProjectRootDirectory, distProjectCacheDirectory}
   ignoreProject
@@ -214,8 +211,10 @@ rebuildInstallPlan ::
   DistDirLayout ->
   CabalDirLayout ->
   ProjectConfig ->
+  Compiler ->
+  Platform ->
+  ProgramDb ->
   [PackageSpecifier UnresolvedSourcePackage] ->
-  -- | @(improvedPlan, elaboratedPlan, _, _, _)@
   IO
     ( ElaboratedInstallPlan, -- with store packages
       ElaboratedInstallPlan, -- with source packages
@@ -231,7 +230,12 @@ rebuildInstallPlan
     }
   CabalDirLayout
     { cabalStoreDirLayout
-    } = \projectConfig localPackages ->
+    }
+  projectConfig
+  compiler
+  platform
+  programDb
+  localPackages =
     runRebuild distProjectRootDirectory $ do
       progsearchpath <- liftIO getSystemSearchPath
       let projectConfigMonitored = projectConfig {projectConfigBuildOnly = mempty}
@@ -254,8 +258,6 @@ rebuildInstallPlan
                 progsearchpath
               )
               $ do
-                compilerEtc@(_, _, programDb) <- configureCompiler verbosity distDirLayout projectConfig
-
                 -- Users are allowed to specify program locations independently for
                 -- each package (e.g. to use a particular version of a pre-processor
                 -- for some packages). However they cannot do this for the compiler
@@ -266,12 +268,12 @@ rebuildInstallPlan
                     (getMapMappend (projectConfigSpecificPackage projectConfig))
 
                 (solverPlan, pkgConfigDB, totalIndexState, activeRepos) <-
-                  phaseRunSolver projectConfig compilerEtc localPackages
+                  phaseRunSolver projectConfig (compiler, platform, programDb) localPackages
 
                 (elaboratedPlan, elaboratedShared) <-
                   phaseElaboratePlan
                     projectConfig
-                    compilerEtc
+                    (compiler, platform, programDb)
                     pkgConfigDB
                     solverPlan
                     localPackages

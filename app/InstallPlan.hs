@@ -11,7 +11,7 @@ import Distribution.Parsec (eitherParsec)
 import Distribution.Simple.Flag (Flag (NoFlag))
 import Distribution.Simple.GHC qualified as Cabal
 import Distribution.Simple.Program (emptyProgramDb)
-import Distribution.System (Platform (Platform), buildPlatform)
+import Distribution.System (buildPlatform)
 import Distribution.Verbosity (Verbosity)
 import Distribution.Verbosity qualified as Verbosity
 import My.ProjectPlanning qualified as My (rebuildInstallPlan, rebuildProjectConfig)
@@ -48,8 +48,8 @@ doMain verbosity inputDir outputDir = do
 
   httpTransport <- configureTransport verbosity mempty Nothing
 
-  (compiler, mPlatform, _) <- Cabal.configure verbosity Nothing Nothing emptyProgramDb
-  let (Platform arch os) = fromMaybe buildPlatform mPlatform
+  (compiler, mPlatform, programDb) <- Cabal.configure verbosity Nothing Nothing emptyProgramDb
+  let platform = fromMaybe buildPlatform mPlatform
 
   putStrLn "now rebuilding project configuration"
 
@@ -57,8 +57,7 @@ doMain verbosity inputDir outputDir = do
     My.rebuildProjectConfig
       verbosity
       compiler
-      arch
-      os
+      platform
       httpTransport
       distDirLayout
       NoFlag -- ignoreProject
@@ -72,7 +71,7 @@ doMain verbosity inputDir outputDir = do
   -- store (when their ids match), and also the original elaborated plan
   -- which uses primarily source packages.
   (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
-    My.rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
+    My.rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig compiler platform programDb localPackages
 
   putStrLn $ "Writing detailed plan to " ++ outputDir
 
