@@ -65,7 +65,7 @@ import Distribution.Client.ProjectConfig.Legacy
 import Distribution.Client.ProjectPlanOutput
   ( writePlanExternalRepresentation,
   )
-import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan)
+import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, configureCompiler)
 import Distribution.Client.ProjectPlanning.Types as Ty
   ( ElaboratedInstallPlan,
     ElaboratedSharedConfig (pkgConfigCompiler),
@@ -118,7 +118,7 @@ import Distribution.Solver.Types.OptionalStanza
   )
 import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb)
 import Distribution.Solver.Types.SourcePackage (SourcePackage)
-import Distribution.System (Platform (..))
+import Distribution.System (Arch, OS, Platform (..))
 import Distribution.Utils.LogProgress (runLogProgress)
 import Distribution.Verbosity (Verbosity, moreVerbose)
 import Distribution.Verbosity qualified as Verbosity
@@ -131,7 +131,8 @@ rebuildProjectConfig ::
   Verbosity ->
   HttpTransport ->
   DistDirLayout ->
-  ProjectConfig ->
+  Flag Bool ->
+  Flag FilePath ->
   IO
     ( ProjectConfig,
       [PackageSpecifier UnresolvedSourcePackage]
@@ -140,27 +141,28 @@ rebuildProjectConfig
   verbosity
   httpTransport
   distDirLayout@DistDirLayout {distProjectRootDirectory, distProjectCacheDirectory}
-  cliConfig =
+  ignoreProject
+  configFile =
     do
       (projectConfig, localPackages) <-
         runRebuild distProjectRootDirectory $ do
-          liftIO $ Cabal.createDirectoryIfMissingVerbose verbosity True distProjectCacheDirectory
-
           projectConfigSkeleton <-
             readProjectConfig
               verbosity
               httpTransport
-              (projectConfigIgnoreProject $ projectConfigShared cliConfig)
-              (projectConfigConfigFile $ projectConfigShared cliConfig)
+              ignoreProject
+              configFile
               distDirLayout
 
           let (projectConfig', _projectConfigImports) = PD.ignoreConditions projectConfigSkeleton
 
-          (compiler, Platform arch os, _) <- configureCompiler verbosity distDirLayout (projectConfig' <> cliConfig)
+          -- configureCompiler does not create the cache directory
+          liftIO $ Cabal.createDirectoryIfMissingVerbose verbosity True distProjectCacheDirectory
+          (compiler, Platform arch os, _) <- configureCompiler verbosity distDirLayout projectConfig'
 
           let projectConfig = instantiateProjectConfigSkeleton os arch (compilerInfo compiler) mempty projectConfigSkeleton
 
-          localPackages <- readLocalPackages verbosity distDirLayout (projectConfig <> cliConfig)
+          localPackages <- readLocalPackages verbosity distDirLayout projectConfig
 
           return (projectConfig, localPackages)
 
@@ -171,10 +173,7 @@ rebuildProjectConfig
               | Explicit path <- Set.toList $ projectConfigProvenance projectConfig
             ]
 
-      return (projectConfig <> cliConfig, localPackages)
-
-configureCompiler :: Verbosity -> DistDirLayout -> ProjectConfig -> Rebuild (Compiler, Platform, c0)
-configureCompiler = undefined
+      return (projectConfig, localPackages)
 
 readLocalPackages ::
   Verbosity ->

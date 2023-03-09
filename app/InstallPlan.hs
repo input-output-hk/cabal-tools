@@ -11,6 +11,7 @@ import Distribution.Verbosity qualified as Verbosity
 import Options.Applicative
 import My.ProjectPlanning qualified as My (rebuildProjectConfig, rebuildInstallPlan)
 import Distribution.Parsec (eitherParsec)
+import Distribution.Simple.Flag (Flag(NoFlag))
 
 main :: IO ()
 main =
@@ -43,14 +44,17 @@ doMain verbosity inputDir outputDir = do
 
   httpTransport <- configureTransport verbosity mempty Nothing
 
+
+
   (projectConfig, localPackages) <-
     My.rebuildProjectConfig
       -- more verbose here to list the project files which have affected
       -- the project configuration with no extra options
-      (moreVerbose verbosity)
+      verbosity
       httpTransport
       distDirLayout
-      mempty
+      NoFlag
+      NoFlag
 
   -- Two variants of the install plan are returned: with and without
   -- packages from the store. That is, the "improved" plan where source
