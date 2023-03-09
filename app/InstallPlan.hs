@@ -63,7 +63,6 @@ doMain verbosity ghcPath inputDir outputDir = do
       distDirLayout
       NoFlag -- ignoreProject
       NoFlag -- configFile
-
   putStrLn "now rebuilding the install plan"
 
   -- Two variants of the install plan are returned: with and without
@@ -72,7 +71,15 @@ doMain verbosity ghcPath inputDir outputDir = do
   -- store (when their ids match), and also the original elaborated plan
   -- which uses primarily source packages.
   (elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
-    My.rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig compiler platform programDb localPackages
+    My.rebuildInstallPlan
+      verbosity
+      distDirLayout
+      (cabalStoreDirLayout cabalDirLayout)
+      projectConfig
+      compiler
+      platform
+      programDb
+      localPackages
 
   putStrLn $ "Writing detailed plan to " ++ outputDir
 

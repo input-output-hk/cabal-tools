@@ -9,9 +9,10 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
+import Data.Traversable (for)
 import Distribution.Client.Compat.Prelude (Verbosity, isJust)
 import Distribution.Client.Dependency (PackageSpecifier, chooseSolver, foldProgress)
-import Distribution.Client.DistDirLayout (CabalDirLayout (..), DistDirLayout (..))
+import Distribution.Client.DistDirLayout (DistDirLayout (..))
 import Distribution.Client.FetchUtils (checkRepoTarballFetched, fetchRepoTarball)
 import Distribution.Client.GlobalFlags (RepoContext (repoContextWithSecureRepo))
 import Distribution.Client.HashValue (hashFromTUF, readFileHashValue)
@@ -65,7 +66,6 @@ import Distribution.Package (Package (packageId))
 import Distribution.PackageDescription (ignoreConditions)
 import Distribution.Simple.Compiler (Compiler, PackageDB (GlobalPackageDB), compilerInfo)
 import Distribution.Simple.Flag (flagToMaybe)
-import Distribution.Simple.LocalBuildInfo (LocalBuildInfo (installedPkgs))
 import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import Distribution.Simple.Program (ProgramDb)
 import Distribution.Simple.Program.Db (configuredPrograms)
@@ -162,7 +162,7 @@ readLocalPackages verbosity distDirLayout projectConfig = do
 rebuildInstallPlan ::
   Verbosity ->
   DistDirLayout ->
-  CabalDirLayout ->
+  StoreDirLayout ->
   ProjectConfig ->
   Compiler ->
   Platform ->
@@ -177,9 +177,7 @@ rebuildInstallPlan ::
 rebuildInstallPlan
   verbosity
   distDirLayout
-  CabalDirLayout
-    { cabalStoreDirLayout
-    }
+  cabalStoreDirLayout
   projectConfig
   compiler
   platform
@@ -417,7 +415,7 @@ getPackageSourceHashes ::
   IO (Map PackageId PackageSourceHash)
 getPackageSourceHashes verbosity withRepoCtx solverPlan = do
   -- Determine if and where to get the package's source hash from.
-  --
+
   let allPkgLocations :: [(PackageId, PackageLocation (Maybe FilePath))]
       allPkgLocations =
         [ (packageId pkg, srcpkgSource pkg)
@@ -451,29 +449,26 @@ getPackageSourceHashes verbosity withRepoCtx solverPlan = do
       -- download and hash the tarball.
       repoTarballPkgsWithMetadata :: [(PackageId, Repo)]
       repoTarballPkgsWithoutMetadata :: [(PackageId, Repo)]
-      ( repoTarballPkgsWithMetadata,
-        repoTarballPkgsWithoutMetadata
-        ) =
-          partitionEithers
-            [ case repo of
-                RepoSecure {} -> Left (pkgid, repo)
-                _ -> Right (pkgid, repo)
-              | (pkgid, RepoTarballPackage repo _ _) <- allPkgLocations
-            ]
+      (repoTarballPkgsWithMetadata, repoTarballPkgsWithoutMetadata) =
+        partitionEithers
+          [ case repo of
+              RepoSecure {} -> Left (pkgid, repo)
+              _ -> Right (pkgid, repo)
+            | (pkgid, RepoTarballPackage repo _ _) <- allPkgLocations
+          ]
 
   -- For tarballs from repos that do not have hashes available we now have
   -- to check if the packages were downloaded already.
-  --
   (repoTarballPkgsToDownload, repoTarballPkgsDownloaded) <-
     partitionEithers
-      <$> sequence
-        [ do
-            mtarball <- checkRepoTarballFetched repo pkgid
+      <$> for
+        repoTarballPkgsWithoutMetadata
+        ( \(pkgId, repo) -> do
+            mtarball <- checkRepoTarballFetched repo pkgId
             return $ case mtarball of
-              Nothing -> Left (pkgid, repo)
-              Just tarball -> Right (pkgid, tarball)
-          | (pkgid, repo) <- repoTarballPkgsWithoutMetadata
-        ]
+              Nothing -> Left (pkgId, repo)
+              Just tarball -> Right (pkgId, tarball)
+        )
 
   (hashesFromRepoMetadata, repoTarballPkgsNewlyDownloaded) <-
     -- Avoid having to initialise the repository (ie 'withRepoCtx') if we
@@ -486,41 +481,35 @@ getPackageSourceHashes verbosity withRepoCtx solverPlan = do
         -- the hashes for the packages
         --
         hashesFromRepoMetadata <-
-          Sec.uncheckClientErrors $ -- TODO: [code cleanup] wrap in our own exceptions
-            Map.fromList . concat
-              <$> sequence
-                -- Reading the repo index is expensive so we group the packages by repo
-                [ repoContextWithSecureRepo repoctx repo $ \secureRepo ->
-                    Sec.withIndex secureRepo $ \repoIndex ->
-                      sequence
-                        [ do
-                            hash <-
-                              Sec.trusted
-                                <$> Sec.indexLookupHash repoIndex pkgid -- strip off Trusted tag
+          -- Reading the repo index is expensive so we group the packages by repo
+          let pkgIdsPerRepo =
+                map (\grp@((_, repo) :| _) -> (repo, map fst (NE.toList grp)))
+                  . NE.groupBy ((==) `on` (remoteRepoName . repoRemote . snd))
+                  . sortBy (compare `on` (remoteRepoName . repoRemote . snd))
+                  $ repoTarballPkgsWithMetadata
+           in Sec.uncheckClientErrors $
+                Map.fromList
+                  <$> foldMap
+                    ( \(repo, pkgids) ->
+                        repoContextWithSecureRepo repoctx repo $ \secureRepo ->
+                          Sec.withIndex secureRepo $ \repoIndex ->
+                            for pkgids $ \pkgid -> do
+                              hash <- Sec.trusted <$> Sec.indexLookupHash repoIndex pkgid -- strip off Trusted tag
 
-                            -- Note that hackage-security currently uses SHA256
-                            -- but this API could in principle give us some other
-                            -- choice in future.
-                            return (pkgid, hashFromTUF hash)
-                          | pkgid <- pkgids
-                        ]
-                  | (repo, pkgids) <-
-                      map (\grp@((_, repo) :| _) -> (repo, map fst (NE.toList grp)))
-                        . NE.groupBy ((==) `on` (remoteRepoName . repoRemote . snd))
-                        . sortBy (compare `on` (remoteRepoName . repoRemote . snd))
-                        $ repoTarballPkgsWithMetadata
-                ]
+                              -- Note that hackage-security currently uses SHA256
+                              -- but this API could in principle give us some other
+                              -- choice in future.
+                              return (pkgid, hashFromTUF hash)
+                    )
+                    pkgIdsPerRepo
 
         -- For tarballs from repos that do not have hashes available, download
         -- the ones we previously determined we need.
         --
         repoTarballPkgsNewlyDownloaded <-
-          sequence
-            [ do
-                tarball <- fetchRepoTarball verbosity repoctx repo pkgid
-                return (pkgid, tarball)
-              | (pkgid, repo) <- repoTarballPkgsToDownload
-            ]
+          for repoTarballPkgsToDownload $ \(pkgId, repo) -> do
+            tarball <- fetchRepoTarball verbosity repoctx repo pkgId
+            return (pkgId, tarball)
 
         return (hashesFromRepoMetadata, repoTarballPkgsNewlyDownloaded)
 
@@ -538,12 +527,12 @@ getPackageSourceHashes verbosity withRepoCtx solverPlan = do
 
   hashesFromTarballFiles <-
     Map.fromList
-      <$> sequence
-        [ do
-            srchash <- readFileHashValue tarball
-            return (pkgid, srchash)
-          | (pkgid, tarball) <- allTarballFilePkgs
-        ]
+      <$> for
+        allTarballFilePkgs
+        ( \(pkgId, tarball) -> do
+            srcHash <- readFileHashValue tarball
+            return (pkgId, srcHash)
+        )
 
   -- Return the combination
   return $! hashesFromRepoMetadata <> hashesFromTarballFiles
