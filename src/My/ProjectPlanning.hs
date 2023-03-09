@@ -1,6 +1,9 @@
+{-# LANGUAGE MultiWayIf #-}
+
 module My.ProjectPlanning where
 
 import Control.Exception (assert)
+import Control.Monad (unless, void)
 import Control.Monad.State as State (MonadIO (liftIO))
 import Data.Foldable (fold)
 import Data.List (deleteBy, groupBy)
@@ -62,6 +65,7 @@ import Distribution.Client.ProjectConfig.Legacy
   ( ProjectConfigSkeleton,
     instantiateProjectConfigSkeleton,
   )
+import Distribution.Client.ProjectConfig.Types
 import Distribution.Client.ProjectPlanOutput
   ( writePlanExternalRepresentation,
   )
@@ -87,7 +91,7 @@ import Distribution.InstalledPackageInfo qualified as IPI
 import Distribution.PackageDescription qualified as Cabal
 import Distribution.PackageDescription qualified as PD
 import Distribution.PackageDescription.Configuration qualified as PD
-import Distribution.Simple.Compiler (Compiler (compilerId), PackageDB (GlobalPackageDB), compilerInfo)
+import Distribution.Simple.Compiler (Compiler (compilerId), CompilerInfo, PackageDB (GlobalPackageDB), compilerInfo)
 import Distribution.Simple.Configure qualified as Cabal
 import Distribution.Simple.GHC qualified as GHC
 import Distribution.Simple.GHCJS qualified as GHCJS
@@ -129,6 +133,9 @@ import Text.PrettyPrint qualified as Disp
 
 rebuildProjectConfig ::
   Verbosity ->
+  Compiler ->
+  Arch ->
+  OS ->
   HttpTransport ->
   DistDirLayout ->
   Flag Bool ->
@@ -139,6 +146,9 @@ rebuildProjectConfig ::
     )
 rebuildProjectConfig
   verbosity
+  compiler
+  arch
+  os
   httpTransport
   distDirLayout@DistDirLayout {distProjectRootDirectory, distProjectCacheDirectory}
   ignoreProject
@@ -147,18 +157,23 @@ rebuildProjectConfig
       (projectConfig, localPackages) <-
         runRebuild distProjectRootDirectory $ do
           projectConfigSkeleton <-
-            readProjectConfig
-              verbosity
-              httpTransport
-              ignoreProject
-              configFile
-              distDirLayout
+            readProjectConfig verbosity httpTransport ignoreProject configFile distDirLayout
 
-          let (projectConfig', _projectConfigImports) = PD.ignoreConditions projectConfigSkeleton
+          let projectConfig' = fst $ PD.ignoreConditions projectConfigSkeleton
 
-          -- configureCompiler does not create the cache directory
-          liftIO $ Cabal.createDirectoryIfMissingVerbose verbosity True distProjectCacheDirectory
-          (compiler, Platform arch os, _) <- configureCompiler verbosity distDirLayout projectConfig'
+          liftIO $ do
+            -- FIXME somehow hcFlavor is always set, I don't know who or what sets it
+            case projectConfigHcFlavor $ projectConfigShared projectConfig' of
+              Flag hcFlavor -> Cabal.warn verbosity $ "ignoring " ++ show hcFlavor ++ " in project config"
+              _ -> pure ()
+
+            case projectConfigHcPath $ projectConfigShared projectConfig' of
+              Flag hcPath -> Cabal.warn verbosity $ "ignoring " ++ hcPath ++ " in project config"
+              _ -> pure ()
+
+            case projectConfigHcPkg $ projectConfigShared projectConfig' of
+              Flag hcPkg -> Cabal.warn verbosity $ "ignoring " ++ hcPkg ++ " in project config"
+              _ -> pure ()
 
           let projectConfig = instantiateProjectConfigSkeleton os arch (compilerInfo compiler) mempty projectConfigSkeleton
 
