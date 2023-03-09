@@ -1,5 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
-
 module My.ProjectPlanning where
 
 import Control.Monad.State as State (MonadIO (liftIO))
@@ -57,10 +55,9 @@ import Distribution.Client.Types.Repo (RemoteRepo (..), Repo (..))
 import Distribution.Package (Package (packageId))
 import Distribution.PackageDescription (ignoreConditions)
 import Distribution.Simple.Compiler (Compiler, PackageDB (GlobalPackageDB), compilerInfo)
-import Distribution.Simple.Flag (flagToMaybe)
+import Distribution.Simple.Flag (Flag (..), flagElim, flagToMaybe)
 import Distribution.Simple.Program (ProgramDb)
 import Distribution.Simple.Program.Db (configuredPrograms)
-import Distribution.Simple.Setup (Flag (..), flagToList)
 import Distribution.Simple.Utils qualified as Cabal
 import Distribution.Solver.Types.OptionalStanza (OptionalStanza (BenchStanzas, TestStanzas))
 import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
@@ -79,7 +76,6 @@ import Original.Distribution.Client.ProjectPlanning
     elaborateInstallPlan,
     instantiateInstallPlan,
     planPackages,
-    reportPlanningFailure,
     shouldBeLocal,
     userInstallDirTemplates,
   )
@@ -301,13 +297,8 @@ computeLocalPackagesEnabledStanzas localPackages projectConfig =
             isLocal = isJust (shouldBeLocal pkg)
             stanzas
               | isLocal =
-                  Map.fromList $
-                    [ (TestStanzas, enabled)
-                      | enabled <- flagToList testsEnabled
-                    ]
-                      ++ [ (BenchStanzas, enabled)
-                           | enabled <- flagToList benchmarksEnabled
-                         ]
+                  flagElim id (Map.insert TestStanzas) testsEnabled $
+                    flagElim id (Map.insert BenchStanzas) benchmarksEnabled Map.empty
               | otherwise = Map.fromList [(TestStanzas, False), (BenchStanzas, False)]
     ]
 
