@@ -254,16 +254,21 @@ rebuildInstallPlan
                 progsearchpath
               )
               $ do
-                compilerEtc <- phaseConfigureCompiler projectConfig
-                _ <- phaseConfigurePrograms projectConfig compilerEtc
+                compilerEtc@(_, _, programDb) <- configureCompiler verbosity distDirLayout projectConfig
+
+                -- Users are allowed to specify program locations independently for
+                -- each package (e.g. to use a particular version of a pre-processor
+                -- for some packages). However they cannot do this for the compiler
+                -- itself as that's just not going to work. So we check for this.
+                liftIO $
+                  checkBadPerPackageCompilerPaths
+                    (configuredPrograms programDb)
+                    (getMapMappend (projectConfigSpecificPackage projectConfig))
+
                 (solverPlan, pkgConfigDB, totalIndexState, activeRepos) <-
-                  phaseRunSolver
-                    projectConfig
-                    compilerEtc
-                    localPackages
-                ( elaboratedPlan,
-                  elaboratedShared
-                  ) <-
+                  phaseRunSolver projectConfig compilerEtc localPackages
+
+                (elaboratedPlan, elaboratedShared) <-
                   phaseElaboratePlan
                     projectConfig
                     compilerEtc
@@ -272,6 +277,7 @@ rebuildInstallPlan
                     localPackages
 
                 phaseMaintainPlanOutputs elaboratedPlan elaboratedShared
+
                 return (elaboratedPlan, elaboratedShared, totalIndexState, activeRepos)
 
           -- The improved plan changes each time we install something, whereas
@@ -288,48 +294,6 @@ rebuildInstallPlan
 
       newFileMonitorInCacheDir :: Eq a => FilePath -> FileMonitor a b
       newFileMonitorInCacheDir = newFileMonitor . distProjectCacheFile
-
-      -- Configure the compiler we're using.
-      --
-      -- This is moderately expensive and doesn't change that often so we cache
-      -- it independently.
-      --
-      phaseConfigureCompiler ::
-        ProjectConfig ->
-        Rebuild (Compiler, Platform, ProgramDb)
-      phaseConfigureCompiler = configureCompiler verbosity distDirLayout
-
-      -- Configuring other programs.
-      --
-      -- Having configred the compiler, now we configure all the remaining
-      -- programs. This is to check we can find them, and to monitor them for
-      -- changes.
-      --
-      -- TODO: [required eventually] we don't actually do this yet.
-      --
-      -- We rely on the fact that the previous phase added the program config for
-      -- all local packages, but that all the programs configured so far are the
-      -- compiler program or related util programs.
-      --
-      phaseConfigurePrograms ::
-        ProjectConfig ->
-        (Compiler, Platform, ProgramDb) ->
-        Rebuild ()
-      phaseConfigurePrograms projectConfig (_, _, compilerprogdb) = do
-        -- Users are allowed to specify program locations independently for
-        -- each package (e.g. to use a particular version of a pre-processor
-        -- for some packages). However they cannot do this for the compiler
-        -- itself as that's just not going to work. So we check for this.
-        liftIO $
-          checkBadPerPackageCompilerPaths
-            (configuredPrograms compilerprogdb)
-            (getMapMappend (projectConfigSpecificPackage projectConfig))
-
-      -- TODO: [required eventually] find/configure other programs that the
-      -- user specifies.
-
-      -- TODO: [required eventually] find/configure all build-tools
-      -- but note that some of them may be built as part of the plan.
 
       -- Run the solver to get the initial install plan.
       -- This is expensive so we cache it independently.
