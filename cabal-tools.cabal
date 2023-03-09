@@ -11,7 +11,8 @@ common warnings
     ghc-options: -Wall
 
 library
-    exposed-modules:  My.Client.ProjectPlanning
+    exposed-modules:  My.ProjectPlanning
+                      Original.Distribution.Client.ProjectPlanning
     build-depends:    base                  >= 4.14.3.0
                     , bytestring
                     , Cabal                ^>= 3.8.0.0

@@ -12,7 +12,7 @@
 
 -- | Planning how to build everything in a project.
 --
-module My.Client.ProjectPlanning where
+module Original.Distribution.Client.ProjectPlanning where
 
 import Prelude ()
 import Distribution.Client.Compat.Prelude
