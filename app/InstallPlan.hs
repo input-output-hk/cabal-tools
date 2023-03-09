@@ -10,7 +10,7 @@ import Distribution.Client.ProjectPlanOutput
 import Distribution.Parsec (eitherParsec)
 import Distribution.Simple.Flag (Flag (NoFlag))
 import Distribution.Simple.GHC qualified as Cabal
-import Distribution.Simple.Program (emptyProgramDb)
+import Distribution.Simple.Program (defaultProgramDb)
 import Distribution.System (buildPlatform)
 import Distribution.Verbosity (Verbosity)
 import Distribution.Verbosity qualified as Verbosity
@@ -34,12 +34,13 @@ main =
               <> value Verbosity.normal
               <> help "Verbosity"
           )
+      ghcPath <- optional (option str (long "with-ghc" <> metavar "GHC-PATH"))
       inputDir <- optional (argument str (metavar "INPUT-DIR"))
       outputDir <- argument str (metavar "OUTPUT-DIR" <> value "./out")
-      pure $ doMain verbosity inputDir outputDir
+      pure $ doMain verbosity ghcPath inputDir outputDir
 
-doMain :: Verbosity -> Maybe FilePath -> [Char] -> IO ()
-doMain verbosity inputDir outputDir = do
+doMain :: Verbosity -> Maybe FilePath -> Maybe FilePath -> [Char] -> IO ()
+doMain verbosity ghcPath inputDir outputDir = do
   cabalDir <- getCabalDir
   let cabalDirLayout = defaultCabalDirLayout cabalDir
 
@@ -48,7 +49,7 @@ doMain verbosity inputDir outputDir = do
 
   httpTransport <- configureTransport verbosity mempty Nothing
 
-  (compiler, mPlatform, programDb) <- Cabal.configure verbosity Nothing Nothing emptyProgramDb
+  (compiler, mPlatform, programDb) <- Cabal.configure verbosity ghcPath Nothing defaultProgramDb
   let platform = fromMaybe buildPlatform mPlatform
 
   putStrLn "now rebuilding project configuration"
@@ -70,7 +71,7 @@ doMain verbosity inputDir outputDir = do
   -- packages are replaced by pre-existing installed packages from the
   -- store (when their ids match), and also the original elaborated plan
   -- which uses primarily source packages.
-  (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
+  (elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
     My.rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig compiler platform programDb localPackages
 
   putStrLn $ "Writing detailed plan to " ++ outputDir

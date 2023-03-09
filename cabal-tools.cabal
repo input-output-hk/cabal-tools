@@ -11,6 +11,7 @@ common warnings
     ghc-options: -Wall
 
 library
+    import:           warnings
     exposed-modules:  My.ProjectPlanning
                       Original.Distribution.Client.ProjectPlanning
     build-depends:    base                  >= 4.14.3.0
