@@ -204,9 +204,6 @@ rebuildInstallPlan
 
     pkgConfigDB <- readPkgConfigDb verbosity programDb
 
-    let localPackagesEnabledStanzas = computeLocalPackagesEnabledStanzas localPackages projectConfig
-    let solverSettings = resolveSolverSettings projectConfig
-
     -- TODO: [code cleanup] it'd be better if the Compiler contained the
     -- ConfiguredPrograms that it needs, rather than relying on the progdb
     -- since we don't need to depend on all the programs here, just the
@@ -222,19 +219,14 @@ rebuildInstallPlan
             compiler
             platform
             Modular
-            solverSettings
+            (resolveSolverSettings projectConfig)
             installedPkgIndex
             sourcePkgDb
             pkgConfigDB
             localPackages
-            localPackagesEnabledStanzas
+            (computeLocalPackagesEnabledStanzas localPackages projectConfig)
         )
-        >>= \case
-          Left msg -> do
-            reportPlanningFailure projectConfig compiler platform localPackages
-            Cabal.die' verbosity msg
-          Right plan ->
-            return plan
+        >>= either (Cabal.die' verbosity) return
 
     sourcePackageHashes <- getPackageSourceHashes verbosity withRepoCtx solverPlan
 
