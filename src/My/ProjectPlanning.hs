@@ -270,7 +270,7 @@ rebuildInstallPlan
 
     Cabal.debugNoWrap verbosity (InstallPlan.showInstallPlan instantiatedPlan)
 
-    return (elaboratedPlan, elaboratedShared, totalIndexState, activeRepos)
+    return (instantiatedPlan, elaboratedShared, totalIndexState, activeRepos)
     where
       corePackageDbs =
         applyPackageDbFlags
