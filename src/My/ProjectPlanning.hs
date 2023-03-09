@@ -1,6 +1,7 @@
 module My.ProjectPlanning where
 
 import Control.Monad.State as State (MonadIO (liftIO))
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Distribution.Client.Compat.Prelude (Verbosity, isJust)
@@ -10,7 +11,8 @@ import Distribution.Client.HttpUtils (HttpTransport)
 import Distribution.Client.IndexUtils qualified as IndexUtils
 import Distribution.Client.InstallPlan qualified as InstallPlan
 import Distribution.Client.ProjectConfig
-  ( checkBadPerPackageCompilerPaths,
+  ( ProjectConfigShared (projectConfigActiveRepos, projectConfigIndexState),
+    checkBadPerPackageCompilerPaths,
     fetchAndReadSourcePackages,
     findProjectPackages,
     lookupLocalPackageConfig,
@@ -39,18 +41,17 @@ import Distribution.Client.ProjectConfig.Types
         projectConfigPackageDBs
       ),
     SolverSettings
-      ( solverSettingActiveRepos,
-        solverSettingIndexState,
-        solverSettingSolver
+      ( solverSettingSolver
       ),
   )
 import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan)
 import Distribution.Client.ProjectPlanning.Types (ElaboratedSharedConfig, SolverInstallPlan)
 import Distribution.Client.RebuildMonad (Rebuild, newFileMonitor, rerunIfChanged, runRebuild)
 import Distribution.Client.Store (StoreDirLayout)
-import Distribution.Client.Types (PackageLocation, UnresolvedSourcePackage, pkgSpecifierTarget)
+import Distribution.Client.Types (PackageLocation, SourcePackageDb, UnresolvedSourcePackage, pkgSpecifierTarget)
 import Distribution.PackageDescription (ignoreConditions)
 import Distribution.Simple.Compiler (Compiler, PackageDB (GlobalPackageDB), compilerInfo)
+import Distribution.Simple.Flag (flagToMaybe)
 import Distribution.Simple.Program (ProgramDb)
 import Distribution.Simple.Program.Db (configuredPrograms)
 import Distribution.Simple.Program.Find (getSystemSearchPath)
@@ -61,6 +62,7 @@ import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb)
 import Distribution.Solver.Types.Progress (Progress)
 import Distribution.Solver.Types.SourcePackage (SourcePackage)
 import Distribution.System (Platform (..))
+import Distribution.Types.PackageName (PackageName)
 import Distribution.Utils.LogProgress (runLogProgress)
 import Original.Distribution.Client.ProjectPlanning (applyPackageDbFlags, elaborateInstallPlan, getInstalledPackages, getPackageSourceHashes, getPkgConfigDb, getSourcePackages, instantiateInstallPlan, packageLocationsSignature, planPackages, programDbSignature, reportPlanningFailure, shouldBeLocal, userInstallDirTemplates)
 
@@ -190,8 +192,21 @@ rebuildInstallPlan
               (configuredPrograms programDb)
               (getMapMappend (projectConfigSpecificPackage projectConfig))
 
-          (solverPlan, pkgConfigDB, totalIndexState, activeRepos) <-
-            phaseRunSolver verbosity distDirLayout projectConfig (compiler, platform, programDb) localPackages
+          (sourcePkgDb, totalIndexState, activeRepos) <-
+            getSourcePackages
+              verbosity
+              withRepoCtx
+              (flagToMaybe $ projectConfigIndexState $ projectConfigShared projectConfig)
+              (flagToMaybe $ projectConfigActiveRepos $ projectConfigShared projectConfig)
+
+          (solverPlan, pkgConfigDB) <-
+            phaseRunSolver
+              verbosity
+              distDirLayout
+              projectConfig
+              (compiler, platform, programDb)
+              sourcePkgDb
+              localPackages
 
           (elaboratedPlan, elaboratedShared) <-
             phaseElaboratePlan
@@ -208,6 +223,12 @@ rebuildInstallPlan
     where
       fileMonitorElaboratedPlan = (newFileMonitor . distProjectCacheFile) "elaborated-plan"
 
+      withRepoCtx =
+        projectConfigWithSolverRepoContext
+          verbosity
+          (projectConfigShared projectConfig)
+          (projectConfigBuildOnly projectConfig)
+
 -- Run the solver to get the initial install plan.
 -- This is expensive so we cache it independently.
 --
@@ -216,17 +237,18 @@ phaseRunSolver ::
   DistDirLayout ->
   ProjectConfig ->
   (Compiler, Platform, ProgramDb) ->
+  SourcePackageDb ->
   [PackageSpecifier UnresolvedSourcePackage] ->
-  Rebuild (SolverInstallPlan, PkgConfigDb, IndexUtils.TotalIndexState, IndexUtils.ActiveRepos)
+  Rebuild (SolverInstallPlan, PkgConfigDb)
 phaseRunSolver
   verbosity
   DistDirLayout {distProjectCacheFile}
-  projectConfig@ProjectConfig
-    { projectConfigShared,
-      projectConfigBuildOnly
-    }
+  projectConfig@ProjectConfig {projectConfigShared}
   (compiler, platform, progdb)
-  localPackages =
+  sourcePkgDb
+  localPackages = do
+    let localPackagesEnabledStanzas = computeLocalPackagesEnabledStanzas localPackages projectConfig
+
     rerunIfChanged
       verbosity
       fileMonitorSolverPlan
@@ -245,13 +267,6 @@ phaseRunSolver
             progdb
             platform
             corePackageDbs
-
-        (sourcePkgDb, tis, ar) <-
-          getSourcePackages
-            verbosity
-            withRepoCtx
-            (solverSettingIndexState solverSettings)
-            (solverSettingActiveRepos solverSettings)
 
         pkgConfigDB <- getPkgConfigDb verbosity progdb
 
@@ -287,7 +302,8 @@ phaseRunSolver
             Left msg -> do
               reportPlanningFailure projectConfig compiler platform localPackages
               Cabal.die' verbosity msg
-            Right plan -> return (plan, pkgConfigDB, tis, ar)
+            Right plan ->
+              return (plan, pkgConfigDB)
     where
       fileMonitorSolverPlan = (newFileMonitor . distProjectCacheFile) "solver-plan"
 
@@ -297,45 +313,43 @@ phaseRunSolver
           [GlobalPackageDB]
           (projectConfigPackageDBs projectConfigShared)
 
-      withRepoCtx =
-        projectConfigWithSolverRepoContext
-          verbosity
-          projectConfigShared
-          projectConfigBuildOnly
-
       solverSettings = resolveSolverSettings projectConfig
 
-      localPackagesEnabledStanzas =
-        Map.fromList
-          [ (pkgname, stanzas)
-            | pkg <- localPackages,
-              -- TODO: misnomer: we should separate
-              -- builtin/global/inplace/local packages
-              -- and packages explicitly mentioned in the project
-              --
-              let pkgname = pkgSpecifierTarget pkg
-                  testsEnabled =
-                    lookupLocalPackageConfig
-                      packageConfigTests
-                      projectConfig
-                      pkgname
-                  benchmarksEnabled =
-                    lookupLocalPackageConfig
-                      packageConfigBenchmarks
-                      projectConfig
-                      pkgname
-                  isLocal = isJust (shouldBeLocal pkg)
-                  stanzas
-                    | isLocal =
-                        Map.fromList $
-                          [ (TestStanzas, enabled)
-                            | enabled <- flagToList testsEnabled
-                          ]
-                            ++ [ (BenchStanzas, enabled)
-                                 | enabled <- flagToList benchmarksEnabled
-                               ]
-                    | otherwise = Map.fromList [(TestStanzas, False), (BenchStanzas, False)]
-          ]
+computeLocalPackagesEnabledStanzas ::
+  [PackageSpecifier (SourcePackage (PackageLocation loc))] ->
+  ProjectConfig ->
+  Map PackageName (Map OptionalStanza Bool)
+computeLocalPackagesEnabledStanzas localPackages projectConfig =
+  Map.fromList
+    [ (pkgname, stanzas)
+      | pkg <- localPackages,
+        -- TODO: misnomer: we should separate
+        -- builtin/global/inplace/local packages
+        -- and packages explicitly mentioned in the project
+        --
+        let pkgname = pkgSpecifierTarget pkg
+            testsEnabled =
+              lookupLocalPackageConfig
+                packageConfigTests
+                projectConfig
+                pkgname
+            benchmarksEnabled =
+              lookupLocalPackageConfig
+                packageConfigBenchmarks
+                projectConfig
+                pkgname
+            isLocal = isJust (shouldBeLocal pkg)
+            stanzas
+              | isLocal =
+                  Map.fromList $
+                    [ (TestStanzas, enabled)
+                      | enabled <- flagToList testsEnabled
+                    ]
+                      ++ [ (BenchStanzas, enabled)
+                           | enabled <- flagToList benchmarksEnabled
+                         ]
+              | otherwise = Map.fromList [(TestStanzas, False), (BenchStanzas, False)]
+    ]
 
 -- Elaborate the solver's install plan to get a fully detailed plan. This
 -- version of the plan has the final nix-style hashed ids.
