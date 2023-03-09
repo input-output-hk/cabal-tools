@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 module My.ProjectPlanning where
 
 import Control.Monad.State as State (MonadIO (liftIO))
@@ -11,7 +13,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Traversable (for)
 import Distribution.Client.Compat.Prelude (Verbosity, isJust)
-import Distribution.Client.Dependency (PackageSpecifier, chooseSolver, foldProgress)
+import Distribution.Client.Dependency (PackageSpecifier, foldProgress)
+import Distribution.Client.Dependency.Types (Solver (Modular))
 import Distribution.Client.DistDirLayout (DistDirLayout (..))
 import Distribution.Client.FetchUtils (checkRepoTarballFetched, fetchRepoTarball)
 import Distribution.Client.GlobalFlags (RepoContext (repoContextWithSecureRepo))
@@ -34,15 +37,7 @@ import Distribution.Client.ProjectConfig.Legacy (instantiateProjectConfigSkeleto
 import Distribution.Client.ProjectConfig.Types
   ( MapMappend (getMapMappend),
     PackageConfig (packageConfigBenchmarks, packageConfigTests),
-    ProjectConfig
-      ( ProjectConfig,
-        projectConfigAllPackages,
-        projectConfigBuildOnly,
-        projectConfigLocalPackages,
-        projectConfigProvenance,
-        projectConfigShared,
-        projectConfigSpecificPackage
-      ),
+    ProjectConfig (..),
     ProjectConfigProvenance (Explicit),
     ProjectConfigShared
       ( projectConfigHcFlavor,
@@ -50,38 +45,44 @@ import Distribution.Client.ProjectConfig.Types
         projectConfigHcPkg,
         projectConfigPackageDBs
       ),
-    SolverSettings
-      ( solverSettingSolver
-      ),
   )
 import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan)
 import Distribution.Client.ProjectPlanning.Types (ElaboratedSharedConfig, SolverInstallPlan)
 import Distribution.Client.RebuildMonad (Rebuild, runRebuild)
 import Distribution.Client.SolverInstallPlan qualified as SolverInstallPlan
 import Distribution.Client.Store (StoreDirLayout)
-import Distribution.Client.Types (PackageLocation, SourcePackageDb, UnresolvedSourcePackage, pkgSpecifierTarget)
+import Distribution.Client.Types (PackageLocation, UnresolvedSourcePackage, pkgSpecifierTarget)
 import Distribution.Client.Types.PackageLocation (PackageLocation (..))
 import Distribution.Client.Types.Repo (RemoteRepo (..), Repo (..))
 import Distribution.Package (Package (packageId))
 import Distribution.PackageDescription (ignoreConditions)
 import Distribution.Simple.Compiler (Compiler, PackageDB (GlobalPackageDB), compilerInfo)
 import Distribution.Simple.Flag (flagToMaybe)
-import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import Distribution.Simple.Program (ProgramDb)
 import Distribution.Simple.Program.Db (configuredPrograms)
 import Distribution.Simple.Setup (Flag (..), flagToList)
 import Distribution.Simple.Utils qualified as Cabal
 import Distribution.Solver.Types.OptionalStanza (OptionalStanza (BenchStanzas, TestStanzas))
-import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb, readPkgConfigDb)
+import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
 import Distribution.Solver.Types.Progress (Progress)
 import Distribution.Solver.Types.SolverPackage
+  ( SolverPackage (SolverPackage, solverPkgSource),
+  )
 import Distribution.Solver.Types.SourcePackage (SourcePackage (..))
 import Distribution.System (Platform (..))
 import Distribution.Types.PackageId (PackageId)
 import Distribution.Types.PackageName (PackageName)
 import Distribution.Utils.LogProgress (runLogProgress)
 import Hackage.Security.Client qualified as Sec
-import Original.Distribution.Client.ProjectPlanning (applyPackageDbFlags, elaborateInstallPlan, instantiateInstallPlan, planPackages, reportPlanningFailure, shouldBeLocal, userInstallDirTemplates)
+import Original.Distribution.Client.ProjectPlanning
+  ( applyPackageDbFlags,
+    elaborateInstallPlan,
+    instantiateInstallPlan,
+    planPackages,
+    reportPlanningFailure,
+    shouldBeLocal,
+    userInstallDirTemplates,
+  )
 
 rebuildProjectConfig ::
   Verbosity ->
@@ -203,31 +204,71 @@ rebuildInstallPlan
 
     pkgConfigDB <- readPkgConfigDb verbosity programDb
 
-    solverPlan <-
-      phaseRunSolver
-        verbosity
-        projectConfig
-        compiler
-        platform
-        installedPkgIndex
-        pkgConfigDB
-        sourcePkgDb
-        localPackages
+    let localPackagesEnabledStanzas = computeLocalPackagesEnabledStanzas localPackages projectConfig
+    let solverSettings = resolveSolverSettings projectConfig
 
-    sourcePackageHashes <-
-      getPackageSourceHashes verbosity withRepoCtx solverPlan
+    -- TODO: [code cleanup] it'd be better if the Compiler contained the
+    -- ConfiguredPrograms that it needs, rather than relying on the progdb
+    -- since we don't need to depend on all the programs here, just the
+    -- ones relevant for the compiler.
+
+    Cabal.notice verbosity "Resolving dependencies..."
+
+    solverPlan <-
+      runProgress
+        verbosity
+        ( planPackages
+            verbosity
+            compiler
+            platform
+            Modular
+            solverSettings
+            installedPkgIndex
+            sourcePkgDb
+            pkgConfigDB
+            localPackages
+            localPackagesEnabledStanzas
+        )
+        >>= \case
+          Left msg -> do
+            reportPlanningFailure projectConfig compiler platform localPackages
+            Cabal.die' verbosity msg
+          Right plan ->
+            return plan
+
+    sourcePackageHashes <- getPackageSourceHashes verbosity withRepoCtx solverPlan
+
+    Cabal.debug verbosity "Elaborating the install plan..."
+
+    defaultInstallDirs <- userInstallDirTemplates compiler
 
     (elaboratedPlan, elaboratedShared) <-
-      phaseElaboratePlan
-        verbosity
-        cabalStoreDirLayout
-        distDirLayout
-        projectConfig
-        (compiler, platform, programDb)
-        pkgConfigDB
-        solverPlan
-        localPackages
-        sourcePackageHashes
+      runLogProgress verbosity $
+        elaborateInstallPlan
+          verbosity
+          platform
+          compiler
+          programDb
+          pkgConfigDB
+          distDirLayout
+          cabalStoreDirLayout
+          solverPlan
+          localPackages
+          sourcePackageHashes
+          defaultInstallDirs
+          (projectConfigShared projectConfig)
+          (projectConfigAllPackages projectConfig)
+          (projectConfigLocalPackages projectConfig)
+          (getMapMappend $ projectConfigSpecificPackage projectConfig)
+
+    let instantiatedPlan =
+          instantiateInstallPlan
+            cabalStoreDirLayout
+            defaultInstallDirs
+            elaboratedShared
+            elaboratedPlan
+
+    Cabal.debugNoWrap verbosity (InstallPlan.showInstallPlan instantiatedPlan)
 
     return (elaboratedPlan, elaboratedShared, totalIndexState, activeRepos)
     where
@@ -241,66 +282,6 @@ rebuildInstallPlan
           verbosity
           (projectConfigShared projectConfig)
           (projectConfigBuildOnly projectConfig)
-
--- Run the solver to get the initial install plan.
--- This is expensive so we cache it independently.
---
-phaseRunSolver ::
-  Verbosity ->
-  ProjectConfig ->
-  Compiler ->
-  Platform ->
-  InstalledPackageIndex ->
-  PkgConfigDb ->
-  SourcePackageDb ->
-  [PackageSpecifier UnresolvedSourcePackage] ->
-  IO SolverInstallPlan
-phaseRunSolver
-  verbosity
-  projectConfig
-  compiler
-  platform
-  installedPkgIndex
-  pkgConfigDB
-  sourcePkgDb
-  localPackages = do
-    let localPackagesEnabledStanzas = computeLocalPackagesEnabledStanzas localPackages projectConfig
-
-    -- TODO: [code cleanup] it'd be better if the Compiler contained the
-    -- ConfiguredPrograms that it needs, rather than relying on the progdb
-    -- since we don't need to depend on all the programs here, just the
-    -- ones relevant for the compiler.
-
-    solver <-
-      chooseSolver
-        verbosity
-        (solverSettingSolver solverSettings)
-        (compilerInfo compiler)
-
-    Cabal.notice verbosity "Resolving dependencies..."
-
-    planOrError <-
-      runProgress verbosity $
-        planPackages
-          verbosity
-          compiler
-          platform
-          solver
-          solverSettings
-          installedPkgIndex
-          sourcePkgDb
-          pkgConfigDB
-          localPackages
-          localPackagesEnabledStanzas
-
-    case planOrError of
-      Left msg -> do
-        reportPlanningFailure projectConfig compiler platform localPackages
-        Cabal.die' verbosity msg
-      Right plan ->
-        return plan
-    where
-      solverSettings = resolveSolverSettings projectConfig
 
 computeLocalPackagesEnabledStanzas ::
   [PackageSpecifier (SourcePackage (PackageLocation loc))] ->
@@ -338,73 +319,7 @@ computeLocalPackagesEnabledStanzas localPackages projectConfig =
               | otherwise = Map.fromList [(TestStanzas, False), (BenchStanzas, False)]
     ]
 
--- Elaborate the solver's install plan to get a fully detailed plan. This
--- version of the plan has the final nix-style hashed ids.
---
-phaseElaboratePlan ::
-  Verbosity ->
-  StoreDirLayout ->
-  DistDirLayout ->
-  ProjectConfig ->
-  (Compiler, Platform, ProgramDb) ->
-  PkgConfigDb ->
-  SolverInstallPlan ->
-  [PackageSpecifier (SourcePackage (PackageLocation loc))] ->
-  Map PackageId PackageSourceHash ->
-  IO
-    ( ElaboratedInstallPlan,
-      ElaboratedSharedConfig
-    )
-phaseElaboratePlan
-  verbosity
-  cabalStoreDirLayout
-  distDirLayout
-  ProjectConfig
-    { projectConfigShared,
-      projectConfigAllPackages,
-      projectConfigLocalPackages,
-      projectConfigSpecificPackage
-    }
-  (compiler, platform, progdb)
-  pkgConfigDB
-  solverPlan
-  localPackages
-  sourcePackageHashes = do
-    Cabal.debug verbosity "Elaborating the install plan..."
-
-    defaultInstallDirs <- userInstallDirTemplates compiler
-
-    (elaboratedPlan, elaboratedShared) <-
-      runLogProgress verbosity $
-        elaborateInstallPlan
-          verbosity
-          platform
-          compiler
-          progdb
-          pkgConfigDB
-          distDirLayout
-          cabalStoreDirLayout
-          solverPlan
-          localPackages
-          sourcePackageHashes
-          defaultInstallDirs
-          projectConfigShared
-          projectConfigAllPackages
-          projectConfigLocalPackages
-          (getMapMappend projectConfigSpecificPackage)
-
-    let instantiatedPlan =
-          instantiateInstallPlan
-            cabalStoreDirLayout
-            defaultInstallDirs
-            elaboratedShared
-            elaboratedPlan
-
-    Cabal.debugNoWrap verbosity (InstallPlan.showInstallPlan instantiatedPlan)
-
-    return (instantiatedPlan, elaboratedShared)
-
--- | Get the 'HashValue' for all the source packages where we use hashes,
+-- Elaborate the-- | Get the 'HashValue' for all the source packages where we use hashes,
 -- and download any packages required to do so.
 --
 -- Note that we don't get hashes for local unpacked packages.
