@@ -58,6 +58,7 @@ import Distribution.Simple.Setup (Flag (..), flagToList)
 import Distribution.Simple.Utils qualified as Cabal
 import Distribution.Solver.Types.OptionalStanza (OptionalStanza (BenchStanzas, TestStanzas))
 import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb)
+import Distribution.Solver.Types.Progress (Progress)
 import Distribution.Solver.Types.SourcePackage (SourcePackage)
 import Distribution.System (Platform (..))
 import Distribution.Utils.LogProgress (runLogProgress)
@@ -267,8 +268,9 @@ phaseRunSolver
               (compilerInfo compiler)
 
           Cabal.notice verbosity "Resolving dependencies..."
+
           planOrError <-
-            foldProgress logMsg (pure . Left) (pure . Right) $
+            runProgress verbosity $
               planPackages
                 verbosity
                 compiler
@@ -280,6 +282,7 @@ phaseRunSolver
                 pkgConfigDB
                 localPackages
                 localPackagesEnabledStanzas
+
           case planOrError of
             Left msg -> do
               reportPlanningFailure projectConfig compiler platform localPackages
@@ -287,6 +290,7 @@ phaseRunSolver
             Right plan -> return (plan, pkgConfigDB, tis, ar)
     where
       fileMonitorSolverPlan = (newFileMonitor . distProjectCacheFile) "solver-plan"
+
       corePackageDbs :: [PackageDB]
       corePackageDbs =
         applyPackageDbFlags
@@ -298,8 +302,8 @@ phaseRunSolver
           verbosity
           projectConfigShared
           projectConfigBuildOnly
+
       solverSettings = resolveSolverSettings projectConfig
-      logMsg message rest = Cabal.debugNoWrap verbosity message >> rest
 
       localPackagesEnabledStanzas =
         Map.fromList
@@ -374,6 +378,7 @@ phaseElaboratePlan
         $ getPackageSourceHashes verbosity withRepoCtx solverPlan
 
     defaultInstallDirs <- liftIO $ userInstallDirTemplates compiler
+
     (elaboratedPlan, elaboratedShared) <-
       liftIO . runLogProgress verbosity $
         elaborateInstallPlan
@@ -392,13 +397,16 @@ phaseElaboratePlan
           projectConfigAllPackages
           projectConfigLocalPackages
           (getMapMappend projectConfigSpecificPackage)
+
     let instantiatedPlan =
           instantiateInstallPlan
             cabalStoreDirLayout
             defaultInstallDirs
             elaboratedShared
             elaboratedPlan
+
     liftIO $ Cabal.debugNoWrap verbosity (InstallPlan.showInstallPlan instantiatedPlan)
+
     return (instantiatedPlan, elaboratedShared)
     where
       fileMonitorSourceHashes = (newFileMonitor . distProjectCacheFile) "source-hashes"
@@ -407,3 +415,8 @@ phaseElaboratePlan
           verbosity
           projectConfigShared
           projectConfigBuildOnly
+
+runProgress :: Verbosity -> Progress String fail b -> IO (Either fail b)
+runProgress verbosity = foldProgress logMsg (pure . Left) (pure . Right)
+  where
+    logMsg message rest = Cabal.debugNoWrap verbosity message >> rest
