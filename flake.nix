@@ -7,12 +7,13 @@
     let
       supportedSystems =
         [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ];
-    in flake-utils.lib.eachSystem supportedSystems (system:
+    in
+    flake-utils.lib.eachSystem supportedSystems (system:
       let
         overlays = [
           haskellNix.overlay
           (final: prev: {
-            hixProject = final.haskell-nix.hix.project {
+            cabal-tools-project = final.haskell-nix.hix.project {
               src = ./.;
               evalSystem = "x86_64-linux";
             };
@@ -22,14 +23,9 @@
           inherit system overlays;
           inherit (haskellNix) config;
         };
-        flake = pkgs.hixProject.flake { };
-      in flake // {
-        legacyPackages = pkgs;
-        package = flake.packages // {
-          "cabal-gen-bounds" =
-            flake.packages."cabal-tools:exe:cabal-gen-bounds";
-          "cabal-builder" = flake.packages."cabal-tools:exe:cabal-builder";
-        };
+      in
+      {
+        packages = (pkgs.cabal-tools-project.getPackage "cabal-tools").components.exes;
       });
 
   # --- Flake Local Nix Configuration ----------------------------
