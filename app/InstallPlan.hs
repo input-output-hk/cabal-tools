@@ -1,25 +1,29 @@
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE NamedFieldPuns #-}
 
 import Control.Monad (join)
-import qualified Data.ByteString.Lazy as BSL
+import Data.ByteString.Lazy qualified as BSL
 import Data.Foldable (for_)
-import Distribution.Client.Config
+import Distribution.Client.Compat.Prelude (exitSuccess)
 import Distribution.Client.DistDirLayout
 import Distribution.Client.HttpUtils
-import qualified Distribution.Client.InstallPlan as InstallPlan
+import Distribution.Client.InstallPlan qualified as InstallPlan
 import Distribution.Client.ProjectConfig
 import Distribution.Client.ProjectPlanOutput
 import Distribution.Client.ProjectPlanning
+import Distribution.Compat.Directory qualified as Cabal
 import Distribution.Package
 import Distribution.Parsec (eitherParsec)
 import Distribution.Pretty (prettyShow)
-import qualified Distribution.Simple.Utils as Cabal
+import Distribution.Simple.Utils qualified as Cabal
 import Distribution.Verbosity (Verbosity, moreVerbose)
-import qualified Distribution.Verbosity as Verbosity
+import Distribution.Verbosity qualified as Verbosity
+import Network.URI
 import Options.Applicative
-import System.Directory (removeDirectoryRecursive, renameFile)
+import System.Directory (createFileLink)
 import System.FilePath ((<.>), (</>))
+import Text.Pretty.Simple (pPrint)
 
 main :: IO ()
 main =
@@ -44,47 +48,60 @@ main =
 
 doMain :: Verbosity -> Maybe FilePath -> [Char] -> IO ()
 doMain verbosity inputDir outputDir = do
-  cabalDir <- getCabalDir
-  let cabalDirLayout = defaultCabalDirLayout cabalDir
+  Cabal.withTempDirectory verbosity "/tmp" "cabal-dir" $ \cabalDir -> do
+    putStrLn $ "Using temp cabal-dir: " <> cabalDir
 
-  Right projectRoot <- findProjectRoot inputDir Nothing
-  let distDirLayout = defaultDistDirLayout projectRoot (Just outputDir)
+    let cabalDirLayout = defaultCabalDirLayout cabalDir
 
-  httpTransport <- configureTransport verbosity mempty Nothing
+    Right projectRoot <- findProjectRoot inputDir Nothing
 
-  (projectConfig, localPackages) <-
-    rebuildProjectConfig
-      -- more verbose here to list the project files which have affected
-      -- the project configuration with no extra options
-      (moreVerbose verbosity)
-      httpTransport
-      distDirLayout
-      mempty
+    absoluteOutputDir <- Cabal.makeAbsolute outputDir
+    let distDirLayout = defaultDistDirLayout projectRoot (Just absoluteOutputDir)
 
-  -- Two variants of the install plan are returned: with and without
-  -- packages from the store. That is, the "improved" plan where source
-  -- packages are replaced by pre-existing installed packages from the
-  -- store (when their ids match), and also the original elaborated plan
-  -- which uses primarily source packages.
-  (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
-    rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
+    httpTransport <- configureTransport verbosity mempty Nothing
 
-  putStrLn $ "Writing detailed plan to " ++ outputDir
+    let httpTransport' =
+          httpTransport
+            { getHttp = \verbosity' uri _mETag filepath _headers ->
+                case uri of
+                  URI {uriAuthority = Just (URIAuth {uriRegName = "hackage.haskell.org"})} -> do
+                    createFileLink filepath "hackage.haskell.org"
+                    return (200, Nothing)
+                  _otherwise ->
+                    Cabal.die' verbosity' $ "Cannot download " ++ show uri
+            }
 
-  writePlanExternalRepresentation distDirLayout elaboratedPlan elaboratedSharedConfig
+    (projectConfig, localPackages) <-
+      rebuildProjectConfig
+        -- more verbose here to list the project files which have affected
+        -- the project configuration with no extra options
+        (moreVerbose verbosity)
+        httpTransport'
+        distDirLayout
+        mempty
 
-  -- tidy up, move plan.json to outputDir and delete cabal cache
-  renameFile (distProjectCacheFile distDirLayout "plan.json") (outputDir </> "plan.json")
-  removeDirectoryRecursive (distProjectCacheDirectory distDirLayout)
+    pPrint projectConfig
 
-  let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
+    -- Two variants of the install plan are returned: with and without
+    -- packages from the store. That is, the "improved" plan where source
+    -- packages are replaced by pre-existing installed packages from the
+    -- store (when their ids match), and also the original elaborated plan
+    -- which uses primarily source packages.
+    (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
+      rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
 
-  for_ ecps $
-    \ElaboratedConfiguredPackage
-       { elabPkgSourceId,
-         elabPkgDescriptionOverride
-       } -> do
-        let pkgFile = outputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
-        for_ elabPkgDescriptionOverride $ \pkgTxt -> do
-          Cabal.info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
-          BSL.writeFile pkgFile pkgTxt
+    putStrLn $ "Writing detailed plan to " ++ absoluteOutputDir
+
+    writePlanExternalRepresentation distDirLayout elaboratedPlan elaboratedSharedConfig
+
+    let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
+
+    for_ ecps $
+      \ElaboratedConfiguredPackage
+         { elabPkgSourceId,
+           elabPkgDescriptionOverride
+         } -> do
+          let pkgFile = absoluteOutputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
+          for_ elabPkgDescriptionOverride $ \pkgTxt -> do
+            Cabal.info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
+            BSL.writeFile pkgFile pkgTxt

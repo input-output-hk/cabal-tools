@@ -22,7 +22,9 @@ executable cabal-install-plan
                     , Cabal-syntax         ^>= 3.8.0.0
                     , cabal-install        ^>= 3.8.0.0
                     , cabal-install-solver ^>= 3.8.0.0
+                    , network-uri
                     , optparse-applicative
+                    , pretty-simple
     hs-source-dirs:   app
     default-language: Haskell2010
 
