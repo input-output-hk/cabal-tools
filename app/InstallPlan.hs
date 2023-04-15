@@ -1,107 +1,154 @@
-{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE NamedFieldPuns #-}
 
-import Control.Monad (join)
 import Data.ByteString.Lazy qualified as BSL
-import Data.Foldable (for_)
-import Distribution.Client.Compat.Prelude (exitSuccess)
+import Data.Map.Strict qualified as Map
 import Distribution.Client.DistDirLayout
-import Distribution.Client.HttpUtils
+import Distribution.Client.IndexUtils
 import Distribution.Client.InstallPlan qualified as InstallPlan
+import Distribution.Client.NixStyleOptions
 import Distribution.Client.ProjectConfig
-import Distribution.Client.ProjectPlanOutput
+import Distribution.Client.ProjectOrchestration
 import Distribution.Client.ProjectPlanning
-import Distribution.Compat.Directory qualified as Cabal
+import Distribution.Client.Setup
+import Distribution.Client.Types.RepoName
+import Distribution.Compat.CharParsing qualified as P
+import Distribution.Compat.Prelude
 import Distribution.Package
-import Distribution.Parsec (eitherParsec)
+import Distribution.Parsec
 import Distribution.Pretty (prettyShow)
-import Distribution.Simple.Utils qualified as Cabal
-import Distribution.Verbosity (Verbosity, moreVerbose)
+import Distribution.ReadE (parsecToReadE)
+import Distribution.Simple.Command
+import Distribution.Simple.Flag
+import Distribution.Simple.Utils
+import Distribution.Verbosity (Verbosity)
 import Distribution.Verbosity qualified as Verbosity
-import Network.URI
-import Options.Applicative
-import System.Directory (createFileLink)
+import System.Directory (createDirectoryIfMissing, doesDirectoryExist)
+import System.Environment (getArgs, getProgName)
 import System.FilePath ((<.>), (</>))
 import Text.Pretty.Simple (pPrint)
 
+printCommandHelp :: (String -> String) -> IO ()
+printCommandHelp help = getProgName >>= putStr . help
+
+printErrors :: [String] -> IO ()
+printErrors errs = do
+  putStr (intercalate "\n" errs)
+  exitWith (ExitFailure 1)
+
+printOptionsList :: [String] -> IO ()
+printOptionsList = putStr . unlines
+
+printGlobalHelp :: (String -> String) -> IO ()
+printGlobalHelp = printCommandHelp
+
+newtype MakeNixPlanFlags = MakeNixPlanFlags
+  { repoPaths :: Map.Map RepoName FilePath
+  }
+  deriving (Show)
+
+defaultMakeNixPlanFlags :: MakeNixPlanFlags
+defaultMakeNixPlanFlags = MakeNixPlanFlags {repoPaths = mempty}
+
 main :: IO ()
-main =
-  join $
-    execParser $
-      Options.Applicative.info
-        (optionsParser <**> helper)
-        (fullDesc <> progDesc "Extracts a cabal install plan")
-  where
-    optionsParser = do
-      verbosity <-
-        option
-          (eitherReader eitherParsec)
-          ( long "verbosity"
-              <> metavar "VERBOSITY"
-              <> value Verbosity.normal
-              <> help "Verbosity"
+main = do
+  args <- getArgs
+
+  let commands = [commandAddAction cmdMakeNixPlanUI cmdMakeNixPlanAction]
+
+  case commandsRun (globalCommand commands) commands args of
+    CommandHelp help -> printGlobalHelp help
+    CommandList opts -> printOptionsList opts
+    CommandErrors errs -> printErrors errs
+    CommandReadyToGo (globalFlags, commandParse) ->
+      case commandParse of
+        CommandHelp help -> printCommandHelp help
+        CommandList opts -> printOptionsList opts
+        CommandErrors errs -> printErrors errs
+        CommandReadyToGo action -> do
+          action globalFlags
+
+cmdMakeNixPlanUI :: CommandUI (NixStyleFlags MakeNixPlanFlags)
+cmdMakeNixPlanUI =
+  CommandUI
+    { commandName = "make-nix-install-plan",
+      commandSynopsis = "Makes an install-plan",
+      commandUsage = ("Usage: " ++),
+      commandDescription = Nothing,
+      commandNotes = Nothing,
+      commandDefaultFlags = defaultNixStyleFlags defaultMakeNixPlanFlags,
+      commandOptions =
+        nixStyleOptions
+          ( const
+              [ option
+                  []
+                  ["repo-path"]
+                  "set repo paths"
+                  repoPaths
+                  (\v flags -> flags {repoPaths = v})
+                  ( reqArg
+                      "REPO-PATH"
+                      ( parsecToReadE
+                          (const "something-expected")
+                          (fmap (uncurry Map.singleton) repoPathParser)
+                      )
+                      (map show . toList)
+                  )
+              ]
           )
-      inputDir <- optional (argument str (metavar "INPUT-DIR"))
-      outputDir <- argument str (metavar "OUTPUT-DIR" <> value "./out")
-      pure $ doMain verbosity inputDir outputDir
+    }
+  where
+    repoPathParser :: ParsecParser (RepoName, FilePath)
+    repoPathParser =
+      (,) <$> parsec <* P.char ':' <*> parsecFilePath
 
-doMain :: Verbosity -> Maybe FilePath -> [Char] -> IO ()
-doMain verbosity inputDir outputDir = do
-  Cabal.withTempDirectory verbosity "/tmp" "cabal-dir" $ \cabalDir -> do
-    putStrLn $ "Using temp cabal-dir: " <> cabalDir
+cmdMakeNixPlanAction :: NixStyleFlags MakeNixPlanFlags -> [String] -> GlobalFlags -> IO ()
+cmdMakeNixPlanAction nixStyleFlags _extraArgs globalFlags = do
+  let NixStyleFlags
+        { configFlags = ConfigFlags {configVerbosity},
+          extraFlags = MakeNixPlanFlags {repoPaths}
+        } = nixStyleFlags
 
-    let cabalDirLayout = defaultCabalDirLayout cabalDir
+  let cliConfig = commandLineFlagsToProjectConfig globalFlags nixStyleFlags mempty
+  let verbosity = fromFlagOrDefault Verbosity.normal configVerbosity
 
-    Right projectRoot <- findProjectRoot inputDir Nothing
+  ProjectBaseContext {distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
+    establishProjectBaseContext verbosity cliConfig OtherCommand
 
-    absoluteOutputDir <- Cabal.makeAbsolute outputDir
-    let distDirLayout = defaultDistDirLayout projectRoot (Just absoluteOutputDir)
+  repareRepositories verbosity (projectConfigBuildOnly projectConfig) (projectConfigShared projectConfig) repoPaths
 
-    httpTransport <- configureTransport verbosity mempty Nothing
+  (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
+    rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
 
-    let httpTransport' =
-          httpTransport
-            { getHttp = \verbosity' uri _mETag filepath _headers ->
-                case uri of
-                  URI {uriAuthority = Just (URIAuth {uriRegName = "hackage.haskell.org"})} -> do
-                    createFileLink filepath "hackage.haskell.org"
-                    return (200, Nothing)
-                  _otherwise ->
-                    Cabal.die' verbosity' $ "Cannot download " ++ show uri
-            }
+  let nixPlanPath = distProjectCacheFile distDirLayout "nix"
+  writeHaskellNixPlan verbosity (nixPlanPath </> "plan.nix") elaboratedPlan elaboratedSharedConfig totalIndexState activeRepos
 
-    (projectConfig, localPackages) <-
-      rebuildProjectConfig
-        -- more verbose here to list the project files which have affected
-        -- the project configuration with no extra options
-        (moreVerbose verbosity)
-        httpTransport'
-        distDirLayout
-        mempty
+repareRepositories :: Verbosity -> ProjectConfigBuildOnly -> ProjectConfigShared -> Map.Map RepoName FilePath -> IO ()
+repareRepositories verbosity ProjectConfigBuildOnly {projectConfigCacheDir} ProjectConfigShared {projectConfigRemoteRepos} repoPaths = do
+  -- AFAIU the code, this flag is always set (because it is set in the initial config)
+  -- note this can be overrideen with --remote-repo-cache
+  let cacheDir = fromFlagOrDefault (error "unknown projectConfigCacheDir") projectConfigCacheDir
 
-    pPrint projectConfig
+  for_ (Map.toList repoPaths) $ \(repoName, storePath) -> do
+    let repoCacheDir = cacheDir </> unRepoName repoName
+    repoCacheDirExists <- doesDirectoryExist repoCacheDir
+    when repoCacheDirExists $ do
+      warn verbosity $ "Directory " <> repoCacheDir <> " already exists"
+      exitFailure
+    pPrint projectConfigRemoteRepos
+    pPrint projectConfigCacheDir
+    pPrint repoPaths
 
-    -- Two variants of the install plan are returned: with and without
-    -- packages from the store. That is, the "improved" plan where source
-    -- packages are replaced by pre-existing installed packages from the
-    -- store (when their ids match), and also the original elaborated plan
-    -- which uses primarily source packages.
-    (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, _tis, _at) <-
-      rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
-
-    putStrLn $ "Writing detailed plan to " ++ absoluteOutputDir
-
-    writePlanExternalRepresentation distDirLayout elaboratedPlan elaboratedSharedConfig
-
-    let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
-
-    for_ ecps $
-      \ElaboratedConfiguredPackage
-         { elabPkgSourceId,
-           elabPkgDescriptionOverride
-         } -> do
-          let pkgFile = absoluteOutputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
-          for_ elabPkgDescriptionOverride $ \pkgTxt -> do
-            Cabal.info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
-            BSL.writeFile pkgFile pkgTxt
+writeHaskellNixPlan :: Verbosity -> FilePath -> ElaboratedInstallPlan -> ElaboratedSharedConfig -> TotalIndexState -> ActiveRepos -> IO ()
+writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _totalIndexState _activeRepos = do
+  createDirectoryIfMissing True outputDir
+  let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
+  for_ ecps $
+    \ElaboratedConfiguredPackage
+       { elabPkgSourceId,
+         elabPkgDescriptionOverride
+       } -> do
+        let pkgFile = outputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
+        for_ elabPkgDescriptionOverride $ \pkgTxt -> do
+          info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
+          BSL.writeFile pkgFile pkgTxt
