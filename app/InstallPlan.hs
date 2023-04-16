@@ -10,7 +10,9 @@ import Distribution.Client.NixStyleOptions
 import Distribution.Client.ProjectConfig
 import Distribution.Client.ProjectOrchestration
 import Distribution.Client.ProjectPlanning
-import Distribution.Client.Setup
+import Distribution.Client.Setup (globalCommand)
+import Distribution.Client.Setup hiding (globalCommand)
+import Distribution.Client.Types.Repo (RemoteRepo (..))
 import Distribution.Client.Types.RepoName
 import Distribution.Compat.CharParsing qualified as P
 import Distribution.Compat.Prelude
@@ -21,12 +23,20 @@ import Distribution.ReadE (parsecToReadE)
 import Distribution.Simple.Command
 import Distribution.Simple.Flag
 import Distribution.Simple.Utils
+import Distribution.Utils.NubList (fromNubList)
 import Distribution.Verbosity (Verbosity)
 import Distribution.Verbosity qualified as Verbosity
-import System.Directory (createDirectoryIfMissing, doesDirectoryExist)
+import Hackage.Security.Client qualified as Sec
+import Hackage.Security.Client.Formats qualified as Sec
+import Hackage.Security.Client.Repository (DownloadedFile)
+import Hackage.Security.Client.Repository qualified as Sec
+import Hackage.Security.Client.Repository.Cache qualified as Sec
+import Hackage.Security.Trusted
+import Hackage.Security.Util.Path hiding (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, (<.>), (</>))
+import Hackage.Security.Util.Path qualified as Sec hiding (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, (<.>), (</>))
+import System.Directory (createDirectoryIfMissing, createFileLink, doesDirectoryExist, getFileSize, listDirectory)
 import System.Environment (getArgs, getProgName)
 import System.FilePath ((<.>), (</>))
-import Text.Pretty.Simple (pPrint)
 
 printCommandHelp :: (String -> String) -> IO ()
 printCommandHelp help = getProgName >>= putStr . help
@@ -124,20 +134,56 @@ cmdMakeNixPlanAction nixStyleFlags _extraArgs globalFlags = do
   writeHaskellNixPlan verbosity (nixPlanPath </> "plan.nix") elaboratedPlan elaboratedSharedConfig totalIndexState activeRepos
 
 repareRepositories :: Verbosity -> ProjectConfigBuildOnly -> ProjectConfigShared -> Map.Map RepoName FilePath -> IO ()
-repareRepositories verbosity ProjectConfigBuildOnly {projectConfigCacheDir} ProjectConfigShared {projectConfigRemoteRepos} repoPaths = do
-  -- AFAIU the code, this flag is always set (because it is set in the initial config)
-  -- note this can be overrideen with --remote-repo-cache
-  let cacheDir = fromFlagOrDefault (error "unknown projectConfigCacheDir") projectConfigCacheDir
+repareRepositories
+  verbosity
+  ProjectConfigBuildOnly {projectConfigCacheDir}
+  ProjectConfigShared {projectConfigRemoteRepos}
+  repoPaths = do
+    -- AFAIU the code, this flag is always set (because it is set in the initial config)
+    -- note this can be overridden with --remote-repo-cache
+    let sharedCacheDir = fromFlagOrDefault (error "unknown projectConfigCacheDir") projectConfigCacheDir
 
-  for_ (Map.toList repoPaths) $ \(repoName, storePath) -> do
-    let repoCacheDir = cacheDir </> unRepoName repoName
-    repoCacheDirExists <- doesDirectoryExist repoCacheDir
-    when repoCacheDirExists $ do
-      warn verbosity $ "Directory " <> repoCacheDir <> " already exists"
-      exitFailure
-    pPrint projectConfigRemoteRepos
-    pPrint projectConfigCacheDir
-    pPrint repoPaths
+    sharedCacheDirExists <- doesDirectoryExist sharedCacheDir
+    when sharedCacheDirExists $ do
+      isEmpty <- null <$> listDirectory sharedCacheDir
+      unless isEmpty $ do
+        notice verbosity $
+          unwords
+            [ "Directory " <> sharedCacheDir <> " already exists and is not empty. I refuse to mess it up.",
+              "You can use the --remote-repo-cache global flag to use another directory."
+            ]
+        exitFailure
+
+    for_ (fromNubList projectConfigRemoteRepos) $ \RemoteRepo {remoteRepoName} -> do
+      let repoLocalDir = sharedCacheDir </> unRepoName remoteRepoName
+      case Map.lookup remoteRepoName repoPaths of
+        Nothing -> do
+          notice verbosity $
+            "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we do not have a path."
+          exitFailure
+        Just path -> do
+          notice verbosity $
+            "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we have a path."
+
+          createDirectoryIfMissingVerbose verbosity False repoLocalDir
+
+          cachePath <- Sec.makeAbsolute $ Sec.fromFilePath repoLocalDir
+          let cache = Sec.Cache cachePath cacheLayout
+
+          timestampJson <- mkLinkedLocalFile (path </> "timestamp.json")
+          Sec.cacheRemoteFile cache timestampJson Sec.FUn (Sec.CacheAs Sec.CachedTimestamp)
+
+          rootJson <- mkLinkedLocalFile (path </> "root.json")
+          Sec.cacheRemoteFile cache rootJson Sec.FUn (Sec.CacheAs Sec.CachedRoot)
+
+          snapshotJson <- mkLinkedLocalFile (path </> "snapshot.json")
+          Sec.cacheRemoteFile cache snapshotJson Sec.FUn (Sec.CacheAs Sec.CachedSnapshot)
+
+          mirrorsJson <- mkLinkedLocalFile (path </> "mirrors.json")
+          Sec.cacheRemoteFile cache mirrorsJson Sec.FUn (Sec.CacheAs Sec.CachedMirrors)
+
+          indexTarGz <- mkLinkedLocalFile (path </> "01-index.tar.gz")
+          Sec.cacheRemoteFile cache indexTarGz Sec.FGz Sec.CacheIndex
 
 writeHaskellNixPlan :: Verbosity -> FilePath -> ElaboratedInstallPlan -> ElaboratedSharedConfig -> TotalIndexState -> ActiveRepos -> IO ()
 writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _totalIndexState _activeRepos = do
@@ -152,3 +198,35 @@ writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _
         for_ elabPkgDescriptionOverride $ \pkgTxt -> do
           info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
           BSL.writeFile pkgFile pkgTxt
+
+mkLinkedLocalFile :: FilePath -> IO (LinkedLocalFile a)
+mkLinkedLocalFile fp = LinkedLocalFile <$> Sec.makeAbsolute (Sec.fromFilePath fp)
+
+newtype LinkedLocalFile a = LinkedLocalFile (Path Absolute)
+
+instance DownloadedFile LinkedLocalFile where
+  downloadedVerify (LinkedLocalFile fp) trustedInfo = do
+    -- Verify the file size before comparing the entire file info
+    filepath <- Sec.toAbsoluteFilePath fp
+    sz <- Sec.FileLength . fromInteger <$> getFileSize filepath
+    if sz /= Sec.fileInfoLength (trusted trustedInfo)
+      then return False
+      else Sec.compareTrustedFileInfo (trusted trustedInfo) <$> Sec.computeFileInfo fp
+
+  downloadedCopyTo (LinkedLocalFile local) dst = do
+    srcA <- Sec.toAbsoluteFilePath local
+    dstA <- Sec.toAbsoluteFilePath dst
+    createFileLink srcA dstA
+
+  downloadedRead (LinkedLocalFile local) =
+    readLazyByteString local
+
+cacheLayout :: Sec.CacheLayout
+cacheLayout =
+  Sec.cabalCacheLayout
+    { Sec.cacheLayoutIndexTar = cacheFn "01-index.tar",
+      Sec.cacheLayoutIndexIdx = cacheFn "01-index.tar.idx",
+      Sec.cacheLayoutIndexTarGz = cacheFn "01-index.tar.gz"
+    }
+  where
+    cacheFn = Sec.rootPath . Sec.fragment
