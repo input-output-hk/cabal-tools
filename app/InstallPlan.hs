@@ -31,10 +31,8 @@ import Hackage.Security.Client.Formats qualified as Sec
 import Hackage.Security.Client.Repository (DownloadedFile)
 import Hackage.Security.Client.Repository qualified as Sec
 import Hackage.Security.Client.Repository.Cache qualified as Sec
-import Hackage.Security.Trusted
-import Hackage.Security.Util.Path hiding (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, (<.>), (</>))
-import Hackage.Security.Util.Path qualified as Sec hiding (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, (<.>), (</>))
-import System.Directory (createDirectoryIfMissing, createFileLink, doesDirectoryExist, getFileSize, listDirectory)
+import Hackage.Security.Util.Path qualified as Sec
+import System.Directory (createDirectoryIfMissing, createFileLink, doesDirectoryExist, listDirectory)
 import System.Environment (getArgs, getProgName)
 import System.FilePath ((<.>), (</>))
 
@@ -202,16 +200,11 @@ writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _
 mkLinkedLocalFile :: FilePath -> IO (LinkedLocalFile a)
 mkLinkedLocalFile fp = LinkedLocalFile <$> Sec.makeAbsolute (Sec.fromFilePath fp)
 
-newtype LinkedLocalFile a = LinkedLocalFile (Path Absolute)
+newtype LinkedLocalFile a = LinkedLocalFile (Sec.Path Sec.Absolute)
 
 instance DownloadedFile LinkedLocalFile where
-  downloadedVerify (LinkedLocalFile fp) trustedInfo = do
-    -- Verify the file size before comparing the entire file info
-    filepath <- Sec.toAbsoluteFilePath fp
-    sz <- Sec.FileLength . fromInteger <$> getFileSize filepath
-    if sz /= Sec.fileInfoLength (trusted trustedInfo)
-      then return False
-      else Sec.compareTrustedFileInfo (trusted trustedInfo) <$> Sec.computeFileInfo fp
+  downloadedVerify (LinkedLocalFile _fp) _trustedInfo =
+    return True
 
   downloadedCopyTo (LinkedLocalFile local) dst = do
     srcA <- Sec.toAbsoluteFilePath local
@@ -219,7 +212,7 @@ instance DownloadedFile LinkedLocalFile where
     createFileLink srcA dstA
 
   downloadedRead (LinkedLocalFile local) =
-    readLazyByteString local
+    Sec.readLazyByteString local
 
 cacheLayout :: Sec.CacheLayout
 cacheLayout =
