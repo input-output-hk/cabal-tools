@@ -1,4 +1,5 @@
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 
 import Data.ByteString.Lazy qualified as BSL
@@ -152,36 +153,53 @@ repareRemoteRepositories
             ]
         exitFailure
 
-    for_ (fromNubList projectConfigRemoteRepos) $ \RemoteRepo {remoteRepoName} -> do
-      let repoLocalDir = sharedCacheDir </> unRepoName remoteRepoName
-      case Map.lookup remoteRepoName repoPaths of
-        Nothing -> do
-          notice verbosity $
-            "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we do not have a path."
-          exitFailure
-        Just path -> do
-          notice verbosity $
-            "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we have a path."
+    for_ (fromNubList projectConfigRemoteRepos) $ \case
+      RemoteRepo {remoteRepoName, remoteRepoSecure = Just True} -> do
+        case Map.lookup remoteRepoName repoPaths of
+          Nothing -> do
+            notice verbosity $
+              "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we do not have a path."
+            exitFailure
+          Just path -> do
+            info verbosity $
+              "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we have a path."
+            let repoLocalDir = sharedCacheDir </> unRepoName remoteRepoName
+            cacheSecureRepo verbosity path repoLocalDir
+      _otherwise -> do
+        notice verbosity $ unwords ["Only secure repositories are supported"]
+        exitFailure
 
-          createDirectoryIfMissingVerbose verbosity False repoLocalDir
+cacheSecureRepo :: Verbosity -> FilePath -> FilePath -> IO ()
+cacheSecureRepo verbosity path repoLocalDir = do
+  createDirectoryIfMissingVerbose verbosity False repoLocalDir
 
-          cachePath <- Sec.makeAbsolute $ Sec.fromFilePath repoLocalDir
-          let cache = Sec.Cache cachePath cacheLayout
+  cachePath <- Sec.makeAbsolute $ Sec.fromFilePath repoLocalDir
+  let cache = Sec.Cache cachePath cacheLayout
 
-          timestampJson <- mkLinkedLocalFile (path </> "timestamp.json")
-          Sec.cacheRemoteFile cache timestampJson Sec.FUn (Sec.CacheAs Sec.CachedTimestamp)
+  timestampJson <- mkLinkedLocalFile (path </> "timestamp.json")
+  Sec.cacheRemoteFile cache timestampJson Sec.FUn (Sec.CacheAs Sec.CachedTimestamp)
 
-          rootJson <- mkLinkedLocalFile (path </> "root.json")
-          Sec.cacheRemoteFile cache rootJson Sec.FUn (Sec.CacheAs Sec.CachedRoot)
+  rootJson <- mkLinkedLocalFile (path </> "root.json")
+  Sec.cacheRemoteFile cache rootJson Sec.FUn (Sec.CacheAs Sec.CachedRoot)
 
-          snapshotJson <- mkLinkedLocalFile (path </> "snapshot.json")
-          Sec.cacheRemoteFile cache snapshotJson Sec.FUn (Sec.CacheAs Sec.CachedSnapshot)
+  snapshotJson <- mkLinkedLocalFile (path </> "snapshot.json")
+  Sec.cacheRemoteFile cache snapshotJson Sec.FUn (Sec.CacheAs Sec.CachedSnapshot)
 
-          mirrorsJson <- mkLinkedLocalFile (path </> "mirrors.json")
-          Sec.cacheRemoteFile cache mirrorsJson Sec.FUn (Sec.CacheAs Sec.CachedMirrors)
+  mirrorsJson <- mkLinkedLocalFile (path </> "mirrors.json")
+  Sec.cacheRemoteFile cache mirrorsJson Sec.FUn (Sec.CacheAs Sec.CachedMirrors)
 
-          indexTarGz <- mkLinkedLocalFile (path </> "01-index.tar.gz")
-          Sec.cacheRemoteFile cache indexTarGz Sec.FGz Sec.CacheIndex
+  -- cacheRemoteFile triggers the creation of 01-index.tar.idx which we
+  -- cannot create in any other way.
+  indexTarGz <- mkLinkedLocalFile (path </> "01-index.tar.gz")
+  Sec.cacheRemoteFile cache indexTarGz Sec.FGz Sec.CacheIndex
+  where
+    cacheLayout =
+      Sec.cabalCacheLayout
+        { Sec.cacheLayoutIndexTar = cacheFn "01-index.tar",
+          Sec.cacheLayoutIndexIdx = cacheFn "01-index.tar.idx",
+          Sec.cacheLayoutIndexTarGz = cacheFn "01-index.tar.gz"
+        }
+    cacheFn = Sec.rootPath . Sec.fragment
 
 writeHaskellNixPlan :: Verbosity -> FilePath -> ElaboratedInstallPlan -> ElaboratedSharedConfig -> TotalIndexState -> ActiveRepos -> IO ()
 writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _totalIndexState _activeRepos = do
@@ -196,6 +214,12 @@ writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _
         for_ elabPkgDescriptionOverride $ \pkgTxt -> do
           info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
           BSL.writeFile pkgFile pkgTxt
+
+--
+-- LinkedLocalFile
+--
+-- This is to hook into hackage-security
+--
 
 mkLinkedLocalFile :: FilePath -> IO (LinkedLocalFile a)
 mkLinkedLocalFile fp = LinkedLocalFile <$> Sec.makeAbsolute (Sec.fromFilePath fp)
@@ -213,13 +237,3 @@ instance DownloadedFile LinkedLocalFile where
 
   downloadedRead (LinkedLocalFile local) =
     Sec.readLazyByteString local
-
-cacheLayout :: Sec.CacheLayout
-cacheLayout =
-  Sec.cabalCacheLayout
-    { Sec.cacheLayoutIndexTar = cacheFn "01-index.tar",
-      Sec.cacheLayoutIndexIdx = cacheFn "01-index.tar.idx",
-      Sec.cacheLayoutIndexTarGz = cacheFn "01-index.tar.gz"
-    }
-  where
-    cacheFn = Sec.rootPath . Sec.fragment
