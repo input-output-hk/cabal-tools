@@ -90,14 +90,14 @@ cmdMakeNixPlanUI =
           ( const
               [ option
                   []
-                  ["repo-path"]
-                  "set repo paths"
+                  ["remote-repo-path"]
+                  "Set a path for a remote repository"
                   repoPaths
                   (\v flags -> flags {repoPaths = v})
                   ( reqArg
-                      "REPO-PATH"
+                      "REPO=PATH"
                       ( parsecToReadE
-                          (const "something-expected")
+                          (const "expected an argument of the form repository-name=path")
                           (fmap (uncurry Map.singleton) repoPathParser)
                       )
                       (map show . toList)
@@ -123,7 +123,7 @@ cmdMakeNixPlanAction nixStyleFlags _extraArgs globalFlags = do
   ProjectBaseContext {distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
     establishProjectBaseContext verbosity cliConfig OtherCommand
 
-  repareRepositories verbosity (projectConfigBuildOnly projectConfig) (projectConfigShared projectConfig) repoPaths
+  repareRemoteRepositories verbosity (projectConfigBuildOnly projectConfig) (projectConfigShared projectConfig) repoPaths
 
   (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
     rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
@@ -131,8 +131,8 @@ cmdMakeNixPlanAction nixStyleFlags _extraArgs globalFlags = do
   let nixPlanPath = distProjectCacheFile distDirLayout "nix"
   writeHaskellNixPlan verbosity (nixPlanPath </> "plan.nix") elaboratedPlan elaboratedSharedConfig totalIndexState activeRepos
 
-repareRepositories :: Verbosity -> ProjectConfigBuildOnly -> ProjectConfigShared -> Map.Map RepoName FilePath -> IO ()
-repareRepositories
+repareRemoteRepositories :: Verbosity -> ProjectConfigBuildOnly -> ProjectConfigShared -> Map.Map RepoName FilePath -> IO ()
+repareRemoteRepositories
   verbosity
   ProjectConfigBuildOnly {projectConfigCacheDir}
   ProjectConfigShared {projectConfigRemoteRepos}
