@@ -20,7 +20,12 @@
           overlays = [ haskellNix.overlay ];
         };
         project = pkgs.haskell-nix.hix.project { src = ./.; };
-        flake = project.flake { };
+        flake = project.flake {
+          variants = {
+            "3.8.1.0" = { cabalProjectLocal = "constraints: cabal-install ==3.8.1.0"; };
+            "3.10.1.0" = { cabalProjectLocal = "constraints: cabal-install ==3.10.1.0"; };
+          };
+        };
       in
       flake // {
         inherit project;

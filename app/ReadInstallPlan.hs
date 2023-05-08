@@ -1,56 +1,67 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Main where
 
-import Data.Binary
-import Data.Binary.Get
+import Data.Binary (Binary (get), Get)
+import Data.Binary.Get (runGetOrFail)
 import Data.ByteString.Lazy qualified as BS
-import Distribution.Client.FileMonitor
-import Distribution.Client.IndexUtils
-import Distribution.Client.InstallPlan
-import Distribution.Client.ProjectConfig
-import Distribution.Client.ProjectPlanning
-import Distribution.Client.Types
-import Distribution.Utils.Structured
-import System.IO
+import Data.Foldable (for_)
+import Distribution.Client.DistDirLayout (DistDirLayout (DistDirLayout, distProjectCacheFile), defaultDistDirLayout)
+import Distribution.Client.FileMonitor (MonitorStateFileSet)
+import Distribution.Client.IndexUtils (ActiveRepos, TotalIndexState)
+import Distribution.Client.InstallPlan (toList)
+import Distribution.Client.ProjectConfig (ProjectConfig, findProjectRoot)
+import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, ElaboratedSharedConfig)
+import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
+import Distribution.Utils.Structured (Structured, Tag)
+import System.IO (IOMode (ReadMode), withBinaryFile)
+import Text.Pretty.Simple (pPrint)
+
+type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
+
+type Value = (ElaboratedInstallPlan, ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
 
 main :: IO ()
 main = do
-  withCacheFile "dist-newstyle/cache/elaborated-plan" $ \case
+  Right prjRoot <- findProjectRoot Nothing Nothing
+  let DistDirLayout {distProjectCacheFile} = defaultDistDirLayout prjRoot Nothing
+
+  withCacheFile @Key @Value (distProjectCacheFile "improved-plan") $ \case
     Left err -> print err
     Right (_monitorStateFileSet, k, Left err) -> do
       print k
       print err
     Right (_monitorStateFileSet, k, Right v) -> do
-      let (projectConfig, localPackages, progSearchPath) = k :: Key
-      let (elaboratedInstallPlan, elaboratedSharedConfig, totalIndexState, activeRepos) = v :: Value
+      let (projectConfig, localPackages, progSearchPath) = k
+      let (improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) = v
 
       putStrLn "-------------------- projectConfig --------------------"
-      print projectConfig
+      pPrint projectConfig
 
       putStrLn "-------------------- localPackages --------------------"
-      print localPackages
+      pPrint localPackages
 
       putStrLn "-------------------- progSearchPath --------------------"
-      print progSearchPath
+      pPrint progSearchPath
 
       putStrLn "-------------------- elaboratedInstallPlan --------------------"
-      print $ toList elaboratedInstallPlan
+      for_ (toList elaboratedPlan) pPrint
+
+      putStrLn "-------------------- elaboratedInstallPlan --------------------"
+      for_ (toList improvedPlan) pPrint
 
       putStrLn "-------------------- elaboratedSharedConfig --------------------"
-      print elaboratedSharedConfig
+      pPrint elaboratedSharedConfig
 
       putStrLn "-------------------- totalIndexState --------------------"
-      print totalIndexState
+      pPrint totalIndexState
 
       putStrLn "-------------------- activeRepos --------------------"
-      print activeRepos
-
-type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
-
-type Value = (ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
+      pPrint activeRepos
 
 withCacheFile ::
   (Binary a, Structured a, Binary b, Structured b) =>
