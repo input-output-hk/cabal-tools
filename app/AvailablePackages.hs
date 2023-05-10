@@ -4,27 +4,23 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Main where
-
 import Data.Foldable (for_)
-import Distribution.Client.DistDirLayout
 import Distribution.Client.HttpUtils
 import Distribution.Client.IndexUtils
 import Distribution.Client.ProjectConfig
 import Distribution.Client.ProjectPlanning
 import Distribution.Client.Types.SourcePackageDb
+import Distribution.Pretty (prettyShow)
 import Distribution.Solver.Types.PackageIndex
 import Distribution.Verbosity
-import Text.Pretty.Simple (pPrint)
+import Opts (parseOpts)
 import System.Environment (getArgs)
-import Distribution.Pretty (prettyShow)
+import Text.Pretty.Simple (pPrint)
 
 main :: IO ()
 main = do
   let verbosity = verbose
-
-  Right prjRoot <- findProjectRoot Nothing Nothing
-  let distDirLayout = defaultDistDirLayout prjRoot Nothing
+  (_prjRoot, distDirLayout) <- parseOpts
 
   httpTransport <- configureTransport verbosity mempty Nothing
 
@@ -55,9 +51,10 @@ main = do
   let SourcePackageDb {packageIndex} = sourcePkgDb
   case args of
     [] -> do
-      for_ (allPackages packageIndex)
+      for_
+        (allPackages packageIndex)
         pPrint
-    s:_ -> do
+    s : _ -> do
       for_ (searchByNameSubstring packageIndex s) $ \(pkgName, pkg) -> do
         putStrLn $ prettyShow pkgName
         pPrint pkg

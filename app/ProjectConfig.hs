@@ -1,37 +1,34 @@
-module Main where
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
-import Distribution.Client.DistDirLayout (defaultDistDirLayout)
-import Distribution.Client.HttpUtils (HttpTransport (..), configureTransport)
-import Distribution.Client.ProjectConfig (findProjectRoot)
-import Distribution.Client.ProjectPlanning (rebuildProjectConfig)
-import Distribution.Verbosity (deafening)
-import Text.Pretty.Simple (pPrint)
+import Distribution.Client.DistDirLayout (DistDirLayout (distProjectCacheFile))
+import Distribution.Client.IndexUtils (ActiveRepos, TotalIndexState)
+import Distribution.Client.ProjectConfig (ProjectConfig)
+import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, ElaboratedSharedConfig)
+import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
+import Opts (parseOpts)
+import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
+import WithCacheFile (withCacheFile)
+
+type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
+
+type Value = (ElaboratedInstallPlan, ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
+
+pPrint' :: Show a => a -> IO ()
+pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg {outputOptionsCompact = True, outputOptionsCompactParens = True}
 
 main :: IO ()
 main = do
-  let verbosity = deafening
+  (_prjRoot, distDirLayout) <- parseOpts
 
-  Right prjRoot <- findProjectRoot Nothing Nothing
+  withCacheFile @Key @Value (distProjectCacheFile distDirLayout "improved-plan") $ \case
+    Left err -> print err
+    Right (_monitorStateFileSet, k, Left err) -> do
+      print k
+      print err
+    Right (_monitorStateFileSet, k, Right _v) -> do
+      let (projectConfig, localPackages, _progSearchPath) = k
 
-  let distDirLayout = defaultDistDirLayout prjRoot Nothing
-
-  httpTransport <- configureTransport verbosity mempty Nothing
-
-  let patchedHttpTransport =
-        httpTransport
-          { getHttp = \verbosity' uri mETag fp headers -> do
-              putStrLn $ "download uri " ++ show uri ++ " to " ++ show fp
-              getHttp httpTransport verbosity' uri mETag fp headers
-          }
-
-  (projectConfig, localPackages) <-
-    rebuildProjectConfig
-      verbosity
-      patchedHttpTransport
-      distDirLayout
-      mempty
-
-  putStrLn "done"
-
-  pPrint projectConfig
-  pPrint localPackages
+      pPrint' projectConfig
+      pPrint' localPackages

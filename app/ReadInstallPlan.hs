@@ -1,25 +1,17 @@
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-module Main where
-
-import Data.Binary (Binary (get), Get)
-import Data.Binary.Get (runGetOrFail)
-import Data.ByteString.Lazy qualified as BS
 import Data.Foldable (for_)
-import Distribution.Client.DistDirLayout (DistDirLayout (DistDirLayout, distProjectCacheFile), defaultDistDirLayout)
-import Distribution.Client.FileMonitor (MonitorStateFileSet)
+import Distribution.Client.DistDirLayout (DistDirLayout (distProjectCacheFile))
 import Distribution.Client.IndexUtils (ActiveRepos, TotalIndexState)
 import Distribution.Client.InstallPlan (toList)
-import Distribution.Client.ProjectConfig (ProjectConfig, findProjectRoot)
+import Distribution.Client.ProjectConfig (ProjectConfig)
 import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, ElaboratedSharedConfig)
 import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
-import Distribution.Utils.Structured (Structured, Tag)
-import System.IO (IOMode (ReadMode), withBinaryFile)
+import Opts (parseOpts)
 import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
+import WithCacheFile (withCacheFile)
 
 type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
 
@@ -30,10 +22,9 @@ pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg {outputOptionsCom
 
 main :: IO ()
 main = do
-  Right prjRoot <- findProjectRoot Nothing Nothing
-  let DistDirLayout {distProjectCacheFile} = defaultDistDirLayout prjRoot Nothing
+  (_prjRoot, distDirLayout) <- parseOpts
 
-  withCacheFile @Key @Value (distProjectCacheFile "improved-plan") $ \case
+  withCacheFile @Key @Value (distProjectCacheFile distDirLayout "improved-plan") $ \case
     Left err -> print err
     Right (_monitorStateFileSet, k, Left err) -> do
       print k
@@ -65,31 +56,3 @@ main = do
 
       putStrLn "-------------------- activeRepos --------------------"
       pPrint' activeRepos
-
-withCacheFile ::
-  (Binary a, Structured a, Binary b, Structured b) =>
-  FilePath ->
-  (Either String (MonitorStateFileSet, a, Either String b) -> IO r) ->
-  IO r
-withCacheFile cacheFile k =
-  withBinaryFile cacheFile ReadMode $ \hnd -> do
-    contents <- structuredDecodeTriple <$> BS.hGetContents hnd
-    k contents
-
-structuredDecodeTriple ::
-  forall a b c.
-  (Structured a, Structured b, Structured c, Binary a, Binary b, Binary c) =>
-  BS.ByteString ->
-  Either String (a, b, Either String c)
-structuredDecodeTriple lbs =
-  let partialDecode =
-        (`runGetOrFail` lbs) $ do
-          (_ :: Tag (a, b, c)) <- get
-          (a :: a) <- get
-          (b :: b) <- get
-          pure (a, b)
-      cleanEither (Left (_, pos, msg)) = Left ("Data.Binary.Get.runGet at position " ++ show pos ++ ": " ++ msg)
-      cleanEither (Right (_, _, v)) = Right v
-   in case partialDecode of
-        Left (_, pos, msg) -> Left ("Data.Binary.Get.runGet at position " ++ show pos ++ ": " ++ msg)
-        Right (lbs', _, (x, y)) -> Right (x, y, cleanEither $ runGetOrFail (get :: Get c) lbs')
