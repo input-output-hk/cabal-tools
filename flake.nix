@@ -19,7 +19,24 @@
           inherit (haskellNix) config;
           overlays = [ haskellNix.overlay ];
         };
-        project = pkgs.haskell-nix.hix.project { src = ./.; };
+        project = pkgs.haskell-nix.cabalProject' {
+          src = ./.;
+
+          name = "cabal-tools";
+          compiler-nix-name = "ghc927";
+          configureArgs = "-v3";
+
+          # We absolutely need cabal 3.10.1.0
+          cabal-install = pkgs.cabal-install; # version 3.10.1.0
+
+          crossPlatforms = p:
+            pkgs.lib.optionals (pkgs.stdenv.system == "x86_64-linux")
+              [ p.mingwW64 p.musl64 ];
+
+          shell.tools.cabal = "latest";
+          shell.tools.hlint = "latest";
+          shell.tools.haskell-language-server = "latest";
+        };
         flake = project.flake {
           variants = {
             "3.8.1.0" = { cabalProjectLocal = "constraints: cabal-install ==3.8.1.0"; };
