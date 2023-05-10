@@ -9,56 +9,66 @@ module Main where
 import Data.Binary (Binary (get), Get)
 import Data.Binary.Get (runGetOrFail)
 import Data.ByteString.Lazy qualified as BS
-import Data.Foldable (for_)
+import Data.Map
 import Distribution.Client.DistDirLayout (DistDirLayout (DistDirLayout, distProjectCacheFile), defaultDistDirLayout)
 import Distribution.Client.FileMonitor (MonitorStateFileSet)
 import Distribution.Client.IndexUtils (ActiveRepos, TotalIndexState)
-import Distribution.Client.InstallPlan (toList)
-import Distribution.Client.ProjectConfig (ProjectConfig, findProjectRoot)
-import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, ElaboratedSharedConfig)
+import Distribution.Client.ProjectConfig (SolverSettings, findProjectRoot)
+import Distribution.Client.SolverInstallPlan (SolverInstallPlan)
 import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
+import Distribution.Simple (Compiler, PackageName)
+import Distribution.Simple.Program (ConfiguredProgram)
+import Distribution.Solver.Types.OptionalStanza (OptionalStanza)
+import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb)
+import Distribution.System (Platform)
 import Distribution.Utils.Structured (Structured, Tag)
 import System.IO (IOMode (ReadMode), withBinaryFile)
-import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
+import Text.Pretty.Simple (pPrintOpt, OutputOptions (outputOptionsCompact, outputOptionsCompactParens), CheckColorTty (NoCheckColorTty), defaultOutputOptionsDarkBg)
+import qualified Distribution.Client.SolverInstallPlan as SIP
+import Data.Foldable (for_)
+import Distribution.Solver.Types.SourcePackage (SourcePackage(srcpkgPackageId))
 
-type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
+type Key = (SolverSettings, [PackageSpecifier UnresolvedSourcePackage], Map PackageName (Map OptionalStanza Bool), Compiler, Platform, [ConfiguredProgram])
 
-type Value = (ElaboratedInstallPlan, ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
+type Value = (SolverInstallPlan, PkgConfigDb, TotalIndexState, ActiveRepos)
 
 pPrint' :: Show a => a -> IO ()
-pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg {outputOptionsCompact = True, outputOptionsCompactParens = True}
+pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg { outputOptionsCompact = True, outputOptionsCompactParens = True }
 
 main :: IO ()
 main = do
   Right prjRoot <- findProjectRoot Nothing Nothing
   let DistDirLayout {distProjectCacheFile} = defaultDistDirLayout prjRoot Nothing
 
-  withCacheFile @Key @Value (distProjectCacheFile "improved-plan") $ \case
+  withCacheFile @Key @Value (distProjectCacheFile "solver-plan") $ \case
     Left err -> print err
     Right (_monitorStateFileSet, k, Left err) -> do
       print k
       print err
     Right (_monitorStateFileSet, k, Right v) -> do
-      let (projectConfig, localPackages, progSearchPath) = k
-      let (improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) = v
+      let (solverSettings, localPackages, localPackagesEnabledStanzas, compiler, platform, configuredPrograms) = k
+      let (solverPlan, _pkgConfigDB, totalIndexState, activeRepos) = v
 
-      putStrLn "-------------------- projectConfig --------------------"
-      pPrint' projectConfig
+      putStrLn "-------------------- solverSettings --------------------"
+      pPrint' solverSettings
 
       putStrLn "-------------------- localPackages --------------------"
-      pPrint' localPackages
+      for_ localPackages $ pPrint' . fmap srcpkgPackageId
 
-      putStrLn "-------------------- progSearchPath --------------------"
-      pPrint' progSearchPath
+      putStrLn "-------------------- localPackagesEnabledStanzas --------------------"
+      pPrint' localPackagesEnabledStanzas
 
-      putStrLn "-------------------- elaboratedInstallPlan --------------------"
-      for_ (toList elaboratedPlan) pPrint'
+      putStrLn "-------------------- compiler --------------------"
+      pPrint' compiler
 
-      putStrLn "-------------------- elaboratedInstallPlan --------------------"
-      for_ (toList improvedPlan) pPrint'
+      putStrLn "-------------------- platform --------------------"
+      pPrint' platform
 
-      putStrLn "-------------------- elaboratedSharedConfig --------------------"
-      pPrint' elaboratedSharedConfig
+      putStrLn "-------------------- configuredPrograms --------------------"
+      pPrint' configuredPrograms
+
+      putStrLn "-------------------- solverPlan --------------------"
+      for_ (SIP.toList solverPlan) pPrint'
 
       putStrLn "-------------------- totalIndexState --------------------"
       pPrint' totalIndexState
