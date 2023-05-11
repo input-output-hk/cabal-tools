@@ -29,7 +29,7 @@ library utils
   hs-source-dirs:   src
   default-language: Haskell2010
 
-executable cabal-project-config
+executable cabal-show-project-config
   import:           warnings
   main-is:          ProjectConfig.hs
   build-depends:
@@ -68,7 +68,7 @@ executable cabal-available-packages
   hs-source-dirs:   app
   default-language: Haskell2010
 
-executable cabal-read-install-plan
+executable cabal-show-install-plan
   import:           warnings
   main-is:          ReadInstallPlan.hs
   build-depends:
@@ -88,7 +88,7 @@ executable cabal-read-install-plan
   hs-source-dirs:   app
   default-language: Haskell2010
 
-executable cabal-read-solver-plan
+executable cabal-show-solver-plan
   import:           warnings
   main-is:          ReadSolverPlan.hs
   build-depends:
