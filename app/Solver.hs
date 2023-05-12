@@ -30,6 +30,7 @@ import Distribution.Client.Types.PackageLocation (PackageLocation (..))
 import Distribution.Client.Types.PackageSpecifier (pkgSpecifierConstraints)
 import Distribution.Client.Types.SourcePackageDb
 import Distribution.Client.Utils (incVersion)
+import Distribution.Compat.Graph (nodeKey)
 import Distribution.Compat.Lens
 import Distribution.Package (Package (packageId), packageName)
 import Distribution.PackageDescription qualified as PD hiding (setupBuildInfo)
@@ -42,6 +43,8 @@ import Distribution.Simple.PackageIndex qualified as InstalledPackageIndex
 import Distribution.Simple.Program (defaultProgramDb)
 import Distribution.Simple.Utils (cabalVersion)
 import Distribution.Solver.Modular (PruneAfterFirstSuccess (..), SolverConfig (..))
+import Distribution.Solver.Modular.Assignment (toCPs)
+import Distribution.Solver.Modular.ConfiguredConversion (convCP)
 import Distribution.Solver.Modular.Dependency
 import Distribution.Solver.Modular.Index (PInfo (..))
 import Distribution.Solver.Modular.IndexConversion
@@ -68,6 +71,7 @@ import Distribution.Types.GenericPackageDescription.Lens
 import Distribution.Types.PackageDescription qualified as PD
 import Distribution.Types.PackageDescription.Lens
 import Distribution.Types.PackageVersionConstraint
+import Distribution.Utils.Generic (ordNubBy)
 import Distribution.Verbosity
 import Distribution.Version
 import Opts (parseOpts)
@@ -299,7 +303,11 @@ main = do
   foldProgress
     (\step rest -> putStrLn step >> rest)
     pPrint
-    pPrint
+    ( \(a, rdm) -> do
+        pPrint a
+        pPrint rdm
+        pPrint $ ordNubBy nodeKey $ map (convCP installedPackages sourcePackages) (toCPs a rdm)
+    )
     $ showMessages progress
 
 -- | Give an interpretation to the global 'PackagesPreference' as
