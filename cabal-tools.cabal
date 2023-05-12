@@ -68,6 +68,27 @@ executable cabal-available-packages
   hs-source-dirs:   app
   default-language: Haskell2010
 
+executable cabal-solver
+  import:           warnings
+  main-is:          Solver.hs
+  build-depends:
+    , aeson
+    , base                  ^>=4.16
+    , binary
+    , bytestring
+    , Cabal
+    , cabal-install
+    , cabal-install-solver
+    , Cabal-syntax
+    , cabal-tools:utils
+    , containers
+    , optparse-applicative
+    , pretty-simple
+    , text
+
+  hs-source-dirs:   app
+  default-language: Haskell2010
+
 executable cabal-show-install-plan
   import:           warnings
   main-is:          ReadInstallPlan.hs
