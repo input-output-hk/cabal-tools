@@ -12,7 +12,7 @@
 import Data.Foldable
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, mapMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Distribution.CabalSpecVersion (CabalSpecVersion, cabalSpecLatest, cabalSpecMinimumLibraryVersion)
@@ -32,7 +32,6 @@ import Distribution.Client.Types.SourcePackageDb
 import Distribution.Client.Utils (incVersion)
 import Distribution.Compat.Lens
 import Distribution.Package (Package (packageId), packageName)
-import Distribution.PackageDescription (PackageDescription ())
 import Distribution.PackageDescription qualified as PD hiding (setupBuildInfo)
 import Distribution.PackageDescription.Configuration qualified as PD
 import Distribution.Pretty (prettyShow)
@@ -61,7 +60,7 @@ import Distribution.Solver.Types.PackageIndex qualified as PackageIndex
 import Distribution.Solver.Types.PackagePreferences (PackagePreferences (..))
 import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
 import Distribution.Solver.Types.Settings (AvoidReinstalls (..), EnableBackjumping (..), ShadowPkgs (..), SolveExecutables (SolveExecutables), StrongFlags (StrongFlags))
-import Distribution.Solver.Types.SourcePackage (SourcePackage)
+import Distribution.Solver.Types.SourcePackage (SourcePackage (SourcePackage))
 import Distribution.Solver.Types.SourcePackage qualified as SP
 import Distribution.System (OS (Windows), Platform (..), buildArch, buildOS)
 import Distribution.Types.Dependency (Dependency (Dependency), mainLibSet)
@@ -461,7 +460,10 @@ setupMaxCabalVersion :: Version
 setupMaxCabalVersion =
   alterVersion (take 2) $ incVersion 1 $ incVersion 1 cabalVersion
 
-localPackagesEnabledStanzas :: ProjectConfig -> [PackageSpecifier (SourcePackage (PackageLocation loc))] -> Map.Map PD.PackageName (Map.Map OptionalStanza Bool)
+localPackagesEnabledStanzas ::
+  ProjectConfig ->
+  [PackageSpecifier (SourcePackage (PackageLocation loc))] ->
+  Map.Map PD.PackageName (Map.Map OptionalStanza Bool)
 localPackagesEnabledStanzas projectConfig localPackages =
   Map.fromList
     [ (pkgname, stanzas)
@@ -481,44 +483,48 @@ localPackagesEnabledStanzas projectConfig localPackages =
                 packageConfigBenchmarks
                 projectConfig
                 pkgname
-            isLocal = isJust (shouldBeLocal pkg)
             stanzas
-              | isLocal =
+              | shouldReallyBeLocal pkg =
                   Map.fromList $
-                    [ (TestStanzas, enabled)
-                      | enabled <- Flag.flagToList testsEnabled
-                    ]
-                      ++ [ (BenchStanzas, enabled)
-                           | enabled <- Flag.flagToList benchmarksEnabled
-                         ]
-              | otherwise = Map.fromList [(TestStanzas, False), (BenchStanzas, False)]
+                    [(TestStanzas, enabled) | enabled <- Flag.flagToList testsEnabled]
+                      <> [(BenchStanzas, enabled) | enabled <- Flag.flagToList benchmarksEnabled]
+              | otherwise =
+                  Map.fromList [(TestStanzas, False), (BenchStanzas, False)]
     ]
 
-shouldBeLocal :: PackageSpecifier (SourcePackage (PackageLocation loc)) -> Maybe PackageId
-shouldBeLocal NamedPackage {} = Nothing
-shouldBeLocal (SpecificSourcePackage pkg) =
-  case SP.srcpkgSource pkg of
-    LocalUnpackedPackage _ -> Just (packageId pkg)
-    _ -> Nothing
+shouldReallyBeLocal :: PackageSpecifier (SourcePackage (PackageLocation loc)) -> Bool
+shouldReallyBeLocal (SpecificSourcePackage (SourcePackage {SP.srcpkgSource = LocalUnpackedPackage {}})) = True
+shouldReallyBeLocal _otherwise = False
 
--- Mostly copied from Distribution.Client.Dependency because not exported
-removeUpperBounds :: AllowNewer -> PackageIndex.PackageIndex UnresolvedSourcePackage -> PackageIndex.PackageIndex UnresolvedSourcePackage
+--
+-- Mostly copied from Distribution.Client.Dependency because they are not exported
+--
+
+removeUpperBounds ::
+  AllowNewer ->
+  PackageIndex.PackageIndex UnresolvedSourcePackage ->
+  PackageIndex.PackageIndex UnresolvedSourcePackage
 removeUpperBounds (AllowNewer relDeps) = removeBounds RelaxUpper relDeps
 
 -- | Dual of 'removeUpperBounds'
-removeLowerBounds :: AllowOlder -> PackageIndex.PackageIndex UnresolvedSourcePackage -> PackageIndex.PackageIndex UnresolvedSourcePackage
+removeLowerBounds ::
+  AllowOlder ->
+  PackageIndex.PackageIndex UnresolvedSourcePackage ->
+  PackageIndex.PackageIndex UnresolvedSourcePackage
 removeLowerBounds (AllowOlder relDeps) = removeBounds RelaxLower relDeps
 
 data RelaxKind = RelaxLower | RelaxUpper
 
 -- | Common internal implementation of 'removeLowerBounds'/'removeUpperBounds'
-removeBounds :: RelaxKind -> RelaxDeps -> PackageIndex.PackageIndex UnresolvedSourcePackage -> PackageIndex.PackageIndex UnresolvedSourcePackage
-removeBounds _ relDeps sourcePkgIndex | not (isRelaxDeps relDeps) = sourcePkgIndex
-removeBounds relKind relDeps sourcePkgIndex = sourcePkgIndex'
+removeBounds ::
+  RelaxKind ->
+  RelaxDeps ->
+  PackageIndex.PackageIndex UnresolvedSourcePackage ->
+  PackageIndex.PackageIndex UnresolvedSourcePackage
+removeBounds relKind relDeps sourcePkgIndex
+  | not (isRelaxDeps relDeps) = sourcePkgIndex
+  | otherwise = fmap relaxDeps sourcePkgIndex
   where
-    sourcePkgIndex' :: PackageIndex.PackageIndex UnresolvedSourcePackage
-    sourcePkgIndex' = fmap relaxDeps sourcePkgIndex
-
     relaxDeps :: UnresolvedSourcePackage -> UnresolvedSourcePackage
     relaxDeps = over srcpkgDescription (relaxPackageDeps relKind relDeps)
 
@@ -530,8 +536,8 @@ relaxPackageDeps ::
   RelaxDeps ->
   PD.GenericPackageDescription ->
   PD.GenericPackageDescription
-relaxPackageDeps _ rd gpd | not (isRelaxDeps rd) = gpd -- subsumed by no-op case in 'removeBounds'
-relaxPackageDeps relKind RelaxDepsAll gpd = PD.transformAllBuildDepends relaxAll gpd
+relaxPackageDeps relKind RelaxDepsAll gpd =
+  PD.transformAllBuildDepends relaxAll gpd
   where
     relaxAll :: Dependency -> Dependency
     relaxAll (Dependency pkgName verRange cs) =
@@ -541,17 +547,15 @@ relaxPackageDeps relKind (RelaxDepsSome depsToRelax0) gpd =
   where
     thisPkgName = packageName gpd
     thisPkgId = packageId gpd
-    depsToRelax = Map.fromList $ mapMaybe f depsToRelax0
 
-    f :: RelaxedDep -> Maybe (RelaxDepSubject, RelaxDepMod)
-    f (RelaxedDep scope rdm p) = case scope of
-      RelaxDepScopeAll -> Just (p, rdm)
-      RelaxDepScopePackage p0
-        | p0 == thisPkgName -> Just (p, rdm)
-        | otherwise -> Nothing
-      RelaxDepScopePackageId p0
-        | p0 == thisPkgId -> Just (p, rdm)
-        | otherwise -> Nothing
+    thisPkgInScope :: RelaxDepScope -> Bool
+    thisPkgInScope RelaxDepScopeAll = True
+    thisPkgInScope (RelaxDepScopePackage p0) | p0 == thisPkgName = True
+    thisPkgInScope (RelaxDepScopePackageId p0) | p0 == thisPkgId = True
+    thisPkgInScope _otherwise = False
+
+    depsToRelax :: Map.Map RelaxDepSubject RelaxDepMod
+    depsToRelax = Map.fromList [(p, rdm) | (RelaxedDep depScope rdm p) <- depsToRelax0, thisPkgInScope depScope]
 
     relaxSome :: Dependency -> Dependency
     relaxSome d@(Dependency depName verRange cs)
