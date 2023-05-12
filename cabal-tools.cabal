@@ -15,6 +15,7 @@ library utils
   exposed-modules:
     Opts
     WithCacheFile
+    SourcePackage.Lens
 
   build-depends:
     , base                  ^>=4.16

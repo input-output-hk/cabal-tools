@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# HLINT ignore "Use <$>" #-}
@@ -29,8 +30,10 @@ import Distribution.Client.Types.PackageLocation (PackageLocation (..))
 import Distribution.Client.Types.PackageSpecifier (pkgSpecifierConstraints)
 import Distribution.Client.Types.SourcePackageDb
 import Distribution.Client.Utils (incVersion)
+import Distribution.Compat.Lens
 import Distribution.Package (Package (packageId), packageName)
-import Distribution.PackageDescription qualified as PD
+import Distribution.PackageDescription (PackageDescription ())
+import Distribution.PackageDescription qualified as PD hiding (setupBuildInfo)
 import Distribution.PackageDescription.Configuration qualified as PD
 import Distribution.Pretty (prettyShow)
 import Distribution.Simple.Compiler
@@ -58,13 +61,18 @@ import Distribution.Solver.Types.PackageIndex qualified as PackageIndex
 import Distribution.Solver.Types.PackagePreferences (PackagePreferences (..))
 import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
 import Distribution.Solver.Types.Settings (AvoidReinstalls (..), EnableBackjumping (..), ShadowPkgs (..), SolveExecutables (SolveExecutables), StrongFlags (StrongFlags))
-import Distribution.Solver.Types.SourcePackage
+import Distribution.Solver.Types.SourcePackage (SourcePackage)
+import Distribution.Solver.Types.SourcePackage qualified as SP
 import Distribution.System (OS (Windows), Platform (..), buildArch, buildOS)
 import Distribution.Types.Dependency (Dependency (Dependency), mainLibSet)
+import Distribution.Types.GenericPackageDescription.Lens
+import Distribution.Types.PackageDescription qualified as PD
+import Distribution.Types.PackageDescription.Lens
 import Distribution.Types.PackageVersionConstraint
 import Distribution.Verbosity
 import Distribution.Version
 import Opts (parseOpts)
+import SourcePackage.Lens
 import Text.Pretty.Simple (pPrint)
 
 main :: IO ()
@@ -350,26 +358,24 @@ interpretPackagesPreference selected defaultPref prefs =
 
 applyDefaultSetupDeps :: Compiler -> Platform -> UnresolvedSourcePackage -> UnresolvedSourcePackage
 applyDefaultSetupDeps comp platform srcpkg =
-  srcpkg
-    { srcpkgDescription =
-        gpkgdesc
-          { PD.packageDescription =
-              pkgdesc
-                { PD.setupBuildInfo =
-                    case PD.setupBuildInfo pkgdesc of
-                      Just sbi -> Just sbi
-                      Nothing -> case defaultSetupDeps comp platform (PD.packageDescription $ srcpkgDescription srcpkg) of
-                        Nothing -> Nothing
-                        Just deps
-                          | isCustom -> Just PD.SetupBuildInfo {PD.defaultSetupDepends = True, PD.setupDepends = deps}
-                          | otherwise -> Nothing
-                }
-          }
-    }
+  over
+    (srcpkgDescription . packageDescription . setupBuildInfo)
+    ( \case
+        Just sbi ->
+          Just sbi
+        Nothing ->
+          case defaultSetupDeps comp platform (srcpkg ^. srcpkgDescription . packageDescription) of
+            Nothing ->
+              Nothing
+            Just deps
+              | isCustom -> Just PD.SetupBuildInfo {PD.defaultSetupDepends = True, PD.setupDepends = deps}
+              | otherwise -> Nothing
+    )
+    srcpkg
   where
     isCustom = PD.buildType pkgdesc == PD.Custom
-    gpkgdesc = srcpkgDescription srcpkg
-    pkgdesc = PD.packageDescription gpkgdesc
+    gpkgdesc = view srcpkgDescription srcpkg
+    pkgdesc = view packageDescription gpkgdesc
 
 -- | Append the given package databases to an existing PackageDBStack.
 -- A @Nothing@ entry will clear everything before it.
@@ -490,9 +496,10 @@ localPackagesEnabledStanzas projectConfig localPackages =
 
 shouldBeLocal :: PackageSpecifier (SourcePackage (PackageLocation loc)) -> Maybe PackageId
 shouldBeLocal NamedPackage {} = Nothing
-shouldBeLocal (SpecificSourcePackage pkg) = case srcpkgSource pkg of
-  LocalUnpackedPackage _ -> Just (packageId pkg)
-  _ -> Nothing
+shouldBeLocal (SpecificSourcePackage pkg) =
+  case SP.srcpkgSource pkg of
+    LocalUnpackedPackage _ -> Just (packageId pkg)
+    _ -> Nothing
 
 -- Mostly copied from Distribution.Client.Dependency because not exported
 removeUpperBounds :: AllowNewer -> PackageIndex.PackageIndex UnresolvedSourcePackage -> PackageIndex.PackageIndex UnresolvedSourcePackage
@@ -513,10 +520,7 @@ removeBounds relKind relDeps sourcePkgIndex = sourcePkgIndex'
     sourcePkgIndex' = fmap relaxDeps sourcePkgIndex
 
     relaxDeps :: UnresolvedSourcePackage -> UnresolvedSourcePackage
-    relaxDeps srcPkg =
-      srcPkg
-        { srcpkgDescription = relaxPackageDeps relKind relDeps (srcpkgDescription srcPkg)
-        }
+    relaxDeps = over srcpkgDescription (relaxPackageDeps relKind relDeps)
 
 -- | Relax the dependencies of this package if needed.
 --
