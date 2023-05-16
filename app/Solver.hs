@@ -16,6 +16,7 @@ import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Distribution.CabalSpecVersion (CabalSpecVersion, cabalSpecLatest, cabalSpecMinimumLibraryVersion)
+import Distribution.Client.Compat.Prelude (exitSuccess)
 import Distribution.Client.Dependency hiding (removeLowerBounds, removeUpperBounds)
 import Distribution.Client.HttpUtils
 import Distribution.Client.IndexUtils
@@ -32,6 +33,7 @@ import Distribution.Client.Types.SourcePackageDb
 import Distribution.Client.Utils (incVersion)
 import Distribution.Compat.Graph (nodeKey)
 import Distribution.Compat.Lens
+import Distribution.InstalledPackageInfo (InstalledPackageInfo (..))
 import Distribution.Package (Package (packageId), packageName)
 import Distribution.PackageDescription qualified as PD hiding (setupBuildInfo)
 import Distribution.PackageDescription.Configuration qualified as PD
@@ -39,6 +41,7 @@ import Distribution.Pretty (prettyShow)
 import Distribution.Simple.Compiler
 import Distribution.Simple.Flag qualified as Flag
 import Distribution.Simple.GHC qualified as GHC
+import Distribution.Simple.PackageIndex qualified as Cabal.PackageIndex
 import Distribution.Simple.PackageIndex qualified as InstalledPackageIndex
 import Distribution.Simple.Program (defaultProgramDb)
 import Distribution.Simple.Utils (cabalVersion)
@@ -78,8 +81,37 @@ import Opts (parseOpts)
 import SourcePackage.Lens
 import Text.Pretty.Simple (pPrint)
 
+test :: IO ()
+test = do
+  let verbosity = verbose
+  (compiler, _, progDb) <- GHC.configure verbosity Nothing Nothing defaultProgramDb
+  installedPkgIndex <-
+    IndexUtils.getInstalledPackages
+      verbosity
+      compiler
+      [GlobalPackageDB, SpecificPackageDB "/home/andrea/.local/state/cabal/store/ghc-9.2.7/package.db"]
+      progDb
+  for_ (Cabal.PackageIndex.allPackages installedPkgIndex) $
+    \InstalledPackageInfo
+       { sourcePackageId,
+         sourceLibName,
+         installedComponentId_,
+         libVisibility,
+         installedUnitId
+       } -> do
+        putStrLn "-----"
+        putStrLn $ prettyShow sourcePackageId
+        print sourceLibName
+        putStrLn $ prettyShow installedComponentId_
+        putStrLn $ prettyShow libVisibility
+        putStrLn $ prettyShow installedUnitId
+
+  exitSuccess
+
 main :: IO ()
 main = do
+  test
+
   let verbosity = deafening
   (_prjRoot, distDirLayout) <- parseOpts
 
