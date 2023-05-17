@@ -9,6 +9,8 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
+import Control.Monad (unless)
+import Control.Monad.Writer.CPS (MonadWriter (..), execWriter)
 import Data.Foldable
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
@@ -148,66 +150,70 @@ main = do
 
   let pkgStanzasEnabled = localPackagesEnabledStanzas projectConfig localPackages
 
-  let constraints =
-        [ LabeledPackageConstraint
-            ( PackageConstraint
-                (ScopeAnySetupQualifier cabalPkgname)
-                (PackagePropertyVersion $ orLaterVersion $ setupMinCabalVersion compiler)
-            )
-            ConstraintSetupCabalMinVersion
-        ]
-          ++ [ LabeledPackageConstraint
-                 ( PackageConstraint
-                     (ScopeAnySetupQualifier cabalPkgname)
-                     (PackagePropertyVersion $ earlierVersion setupMaxCabalVersion)
-                 )
-                 ConstraintSetupCabalMaxVersion
-             ]
-          -- version constraints from the config file or command line
-          ++ [ LabeledPackageConstraint (userToPackageConstraint pc) src
-               | (pc, src) <- solverSettingConstraints
-             ]
-          -- enable stanza constraints where the user asked to enable
-          ++ [ LabeledPackageConstraint
-                 ( PackageConstraint
-                     (scopeToplevel pkgname)
-                     (PackagePropertyStanzas stanzas)
-                 )
-                 ConstraintSourceConfigFlagOrTarget
-               | pkg <- localPackages,
-                 let pkgname = pkgSpecifierTarget pkg
-                     stanzaM = Map.findWithDefault Map.empty pkgname pkgStanzasEnabled
-                     stanzas =
-                       [ stanza | stanza <- [minBound .. maxBound], Map.lookup stanza stanzaM == Just True
-                       ],
-                 not (null stanzas)
-             ]
-          -- TODO: [nice to have] should have checked at some point that the
-          -- package in question actually has these flags.
-          ++ [ LabeledPackageConstraint
-                 ( PackageConstraint
-                     (scopeToplevel pkgname)
-                     (PackagePropertyFlags flags)
-                 )
-                 ConstraintSourceConfigFlagOrTarget
-               | (pkgname, flags) <- Map.toList solverSettingFlagAssignments
-             ]
-          -- TODO: [nice to have] we have user-supplied flags for unspecified
-          -- local packages (as well as specific per-package flags). For the
-          -- former we just apply all these flags to all local targets which
-          -- is silly. We should check if the flags are appropriate.
-          ++ [ LabeledPackageConstraint
-                 ( PackageConstraint
-                     (scopeToplevel pkgname)
-                     (PackagePropertyFlags flags)
-                 )
-                 ConstraintSourceConfigFlagOrTarget
-               | let flags = solverSettingFlagAssignment,
-                 not (PD.nullFlagAssignment flags),
-                 pkg <- localPackages,
-                 let pkgname = pkgSpecifierTarget pkg
-             ]
-          ++ concatMap pkgSpecifierConstraints localPackages
+  let constraints = execWriter $ do
+        tell
+          [ LabeledPackageConstraint
+              ( PackageConstraint
+                  (ScopeAnySetupQualifier cabalPkgname)
+                  (PackagePropertyVersion $ orLaterVersion $ setupMinCabalVersion compiler)
+              )
+              ConstraintSetupCabalMinVersion
+          ]
+
+        tell
+          [ LabeledPackageConstraint
+              ( PackageConstraint
+                  (ScopeAnySetupQualifier cabalPkgname)
+                  (PackagePropertyVersion $ earlierVersion setupMaxCabalVersion)
+              )
+              ConstraintSetupCabalMaxVersion
+          ]
+
+        -- version constraints from the config file or command line
+        for_ solverSettingConstraints $ \(pc, src) ->
+          tell [LabeledPackageConstraint (userToPackageConstraint pc) src]
+
+        -- enable stanza constraints where the user asked to enable
+        for_ localPackages $ \pkg -> do
+          let pkgname = pkgSpecifierTarget pkg
+              stanzaM = Map.findWithDefault Map.empty pkgname pkgStanzasEnabled
+              stanzas = [stanza | stanza <- [minBound .. maxBound], Map.lookup stanza stanzaM == Just True]
+          unless (null stanzas) $
+            tell
+              [ LabeledPackageConstraint
+                  ( PackageConstraint
+                      (scopeToplevel pkgname)
+                      (PackagePropertyStanzas stanzas)
+                  )
+                  ConstraintSourceConfigFlagOrTarget
+              ]
+
+        -- TODO: [nice to have] should have checked at some point that the package in question actually has these flags.
+        for_ (Map.toList solverSettingFlagAssignments) $ \(pkgname, flags) ->
+          tell
+            [ LabeledPackageConstraint
+                ( PackageConstraint
+                    (scopeToplevel pkgname)
+                    (PackagePropertyFlags flags)
+                )
+                ConstraintSourceConfigFlagOrTarget
+            ]
+
+        -- TODO: [nice to have] we have user-supplied flags for unspecified local packages (as well as specific per-package flags). For the former we just apply all these flags to all local targets which is silly. We should check if the flags are appropriate.
+        for_ localPackages $ \pkg -> do
+          let flags = solverSettingFlagAssignment
+          unless (PD.nullFlagAssignment flags) $ do
+            let pkgname = pkgSpecifierTarget pkg
+            tell
+              [ LabeledPackageConstraint
+                  ( PackageConstraint
+                      (scopeToplevel pkgname)
+                      (PackagePropertyFlags flags)
+                  )
+                  ConstraintSourceConfigFlagOrTarget
+              ]
+
+        tell (foldMap pkgSpecifierConstraints localPackages)
 
   let preferences =
         -- preferences from the config file or command line

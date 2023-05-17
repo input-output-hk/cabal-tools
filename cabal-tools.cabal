@@ -83,6 +83,7 @@ executable cabal-solver
     , Cabal-syntax
     , cabal-tools:utils
     , containers
+    , mtl >= 2.3.1
     , optparse-applicative
     , pretty-simple
     , text
