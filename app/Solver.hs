@@ -16,7 +16,6 @@ import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Distribution.CabalSpecVersion (CabalSpecVersion, cabalSpecLatest, cabalSpecMinimumLibraryVersion)
-import Distribution.Client.Compat.Prelude (exitSuccess)
 import Distribution.Client.Dependency hiding (removeLowerBounds, removeUpperBounds)
 import Distribution.Client.HttpUtils
 import Distribution.Client.IndexUtils
@@ -42,7 +41,6 @@ import Distribution.Simple.Compiler
 import Distribution.Simple.Flag qualified as Flag
 import Distribution.Simple.GHC qualified as GHC
 import Distribution.Simple.PackageIndex qualified as Cabal.PackageIndex
-import Distribution.Simple.PackageIndex qualified as InstalledPackageIndex
 import Distribution.Simple.Program (defaultProgramDb)
 import Distribution.Simple.Utils (cabalVersion)
 import Distribution.Solver.Modular (PruneAfterFirstSuccess (..), SolverConfig (..))
@@ -62,7 +60,7 @@ import Distribution.Solver.Types.InstalledPreference qualified as Preference
 import Distribution.Solver.Types.LabeledPackageConstraint
 import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..))
 import Distribution.Solver.Types.PackageConstraint (ConstraintScope (ScopeAnySetupQualifier), scopeToPackageName)
-import Distribution.Solver.Types.PackageIndex qualified as PackageIndex
+import Distribution.Solver.Types.PackageIndex qualified as Solver.PackageIndex
 import Distribution.Solver.Types.PackagePreferences (PackagePreferences (..))
 import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
 import Distribution.Solver.Types.Settings (AvoidReinstalls (..), EnableBackjumping (..), ShadowPkgs (..), SolveExecutables (SolveExecutables), StrongFlags (StrongFlags))
@@ -75,44 +73,15 @@ import Distribution.Types.PackageDescription qualified as PD
 import Distribution.Types.PackageDescription.Lens
 import Distribution.Types.PackageVersionConstraint
 import Distribution.Utils.Generic (ordNubBy)
-import Distribution.Verbosity
+import Distribution.Verbosity as Verbosity
 import Distribution.Version
 import Opts (parseOpts)
 import SourcePackage.Lens
 import Text.Pretty.Simple (pPrint)
 
-test :: IO ()
-test = do
-  let verbosity = verbose
-  (compiler, _, progDb) <- GHC.configure verbosity Nothing Nothing defaultProgramDb
-  installedPkgIndex <-
-    IndexUtils.getInstalledPackages
-      verbosity
-      compiler
-      [GlobalPackageDB, SpecificPackageDB "/home/andrea/.local/state/cabal/store/ghc-9.2.7/package.db"]
-      progDb
-  for_ (Cabal.PackageIndex.allPackages installedPkgIndex) $
-    \InstalledPackageInfo
-       { sourcePackageId,
-         sourceLibName,
-         installedComponentId_,
-         libVisibility,
-         installedUnitId
-       } -> do
-        putStrLn "-----"
-        putStrLn $ prettyShow sourcePackageId
-        print sourceLibName
-        putStrLn $ prettyShow installedComponentId_
-        putStrLn $ prettyShow libVisibility
-        putStrLn $ prettyShow installedUnitId
-
-  exitSuccess
-
 main :: IO ()
 main = do
-  test
-
-  let verbosity = deafening
+  let verbosity = Verbosity.normal
   (_prjRoot, distDirLayout) <- parseOpts
 
   httpTransport <- configureTransport verbosity mempty Nothing
@@ -154,6 +123,7 @@ main = do
   pkgConfigDb <- readPkgConfigDb verbosity progDb
 
   let corePackageDbs = applyPackageDbFlags [GlobalPackageDB] (projectConfigPackageDBs projectConfigShared)
+  pPrint corePackageDbs
 
   installedPkgIndex <-
     IndexUtils.getInstalledPackages
@@ -162,11 +132,8 @@ main = do
       corePackageDbs
       progDb
 
-  (sourcePkgDb, totalIndexState, activeRepos) <- projectConfigWithSolverRepoContext
-    verbosity
-    projectConfigShared
-    (projectConfigBuildOnly projectConfig)
-    $ \repoctx ->
+  (sourcePkgDb, totalIndexState, activeRepos) <-
+    projectConfigWithSolverRepoContext verbosity projectConfigShared (projectConfigBuildOnly projectConfig) $ \repoctx ->
       getSourcePackagesAtIndexState
         verbosity
         repoctx
@@ -277,7 +244,7 @@ main = do
             fmap (applyDefaultSetupDeps compiler platform) $
               -- add local packages to sourcePkgIndex
               foldl
-                (flip PackageIndex.insert)
+                (flip Solver.PackageIndex.insert)
                 sourcePkgIndex
                 [pkg | SpecificSourcePackage pkg <- localPackages]
 
@@ -285,9 +252,18 @@ main = do
 
   let installedPackages =
         foldl'
-          (flip InstalledPackageIndex.deleteSourcePackageId)
+          (flip Cabal.PackageIndex.deleteSourcePackageId)
           installedPkgIndex
           [packageId pkg | SpecificSourcePackage pkg <- localPackages]
+
+  putStrLn "----- installedPkgIndex -----"
+  for_ (Cabal.PackageIndex.allPackages installedPkgIndex) $ \ipi -> do
+    putStrLn "-----"
+    putStrLn $ prettyShow $ sourcePackageId ipi
+    print $ sourceLibName ipi
+    putStrLn $ prettyShow $ installedComponentId_ ipi
+    putStrLn $ prettyShow $ libVisibility ipi
+    putStrLn $ prettyShow $ installedUnitId ipi
 
   -- Constraints have to be converted into a finite map indexed by PN.
   let gcs =
@@ -308,6 +284,10 @@ main = do
           (SolveExecutables True)
           installedPackages
           sourcePackages
+
+  for_ (Map.toList idx) $ \(pn, mipi) ->
+    for_ (Map.keys mipi) $ \(I ver loc) ->
+      putStrLn $ unwords [prettyShow (PackageIdentifier pn ver), show loc]
 
   let solverConfig =
         SolverConfig
@@ -542,15 +522,15 @@ shouldReallyBeLocal _otherwise = False
 
 removeUpperBounds ::
   AllowNewer ->
-  PackageIndex.PackageIndex UnresolvedSourcePackage ->
-  PackageIndex.PackageIndex UnresolvedSourcePackage
+  Solver.PackageIndex.PackageIndex UnresolvedSourcePackage ->
+  Solver.PackageIndex.PackageIndex UnresolvedSourcePackage
 removeUpperBounds (AllowNewer relDeps) = removeBounds RelaxUpper relDeps
 
 -- | Dual of 'removeUpperBounds'
 removeLowerBounds ::
   AllowOlder ->
-  PackageIndex.PackageIndex UnresolvedSourcePackage ->
-  PackageIndex.PackageIndex UnresolvedSourcePackage
+  Solver.PackageIndex.PackageIndex UnresolvedSourcePackage ->
+  Solver.PackageIndex.PackageIndex UnresolvedSourcePackage
 removeLowerBounds (AllowOlder relDeps) = removeBounds RelaxLower relDeps
 
 data RelaxKind = RelaxLower | RelaxUpper
@@ -559,8 +539,8 @@ data RelaxKind = RelaxLower | RelaxUpper
 removeBounds ::
   RelaxKind ->
   RelaxDeps ->
-  PackageIndex.PackageIndex UnresolvedSourcePackage ->
-  PackageIndex.PackageIndex UnresolvedSourcePackage
+  Solver.PackageIndex.PackageIndex UnresolvedSourcePackage ->
+  Solver.PackageIndex.PackageIndex UnresolvedSourcePackage
 removeBounds relKind relDeps sourcePkgIndex
   | not (isRelaxDeps relDeps) = sourcePkgIndex
   | otherwise = fmap relaxDeps sourcePkgIndex
