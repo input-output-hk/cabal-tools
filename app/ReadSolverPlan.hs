@@ -60,7 +60,7 @@ main = do
       pPrint' configuredPrograms
 
       putStrLn "-------------------- solverPlan --------------------"
-      for_ (SIP.toList solverPlan) pPrint'
+      putStrLn $ SIP.showInstallPlan solverPlan
 
       putStrLn "-------------------- totalIndexState --------------------"
       pPrint' totalIndexState
