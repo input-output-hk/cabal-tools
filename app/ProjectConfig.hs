@@ -6,15 +6,12 @@ import Distribution.Client.DistDirLayout (DistDirLayout (distProjectCacheFile))
 import Distribution.Client.ProjectConfig (ProjectConfig)
 import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
 import Opts (parseOpts)
-import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
+import PrettyPrint (pPrint)
 import WithCacheFile (withCacheFile)
 
 type Key = (FilePath, FilePath)
 
 type Value = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage])
-
-pPrint' :: Show a => a -> IO ()
-pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg {outputOptionsCompact = True, outputOptionsCompactParens = True}
 
 main :: IO ()
 main = do
@@ -29,7 +26,7 @@ main = do
       let (configPath, projectFile) = k
       let (projectConfig, localPackages) = v
 
-      pPrint' configPath
-      pPrint' projectFile
-      pPrint' projectConfig
-      pPrint' localPackages
+      pPrint configPath
+      pPrint projectFile
+      pPrint projectConfig
+      pPrint localPackages

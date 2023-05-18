@@ -1,0 +1,5 @@
+packages: .
+
+allow-newer:
+    cabal-install-3.10.1.0:base
+  , cabal-install-solver-3.10.1.0:base

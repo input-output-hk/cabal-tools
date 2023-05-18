@@ -18,15 +18,12 @@ import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb)
 import Distribution.Solver.Types.SourcePackage (SourcePackage (srcpkgPackageId))
 import Distribution.System (Platform)
 import Opts (parseOpts)
-import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
+import PrettyPrint (pPrint)
 import WithCacheFile (withCacheFile)
 
 type Key = (SolverSettings, [PackageSpecifier UnresolvedSourcePackage], Map PackageName (Map OptionalStanza Bool), Compiler, Platform, [ConfiguredProgram])
 
 type Value = (SolverInstallPlan, PkgConfigDb, TotalIndexState, ActiveRepos)
-
-pPrint' :: Show a => a -> IO ()
-pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg {outputOptionsCompact = True, outputOptionsCompactParens = True}
 
 main :: IO ()
 main = do
@@ -42,28 +39,28 @@ main = do
       let (solverPlan, _pkgConfigDB, totalIndexState, activeRepos) = v
 
       putStrLn "-------------------- solverSettings --------------------"
-      pPrint' solverSettings
+      PrettyPrint.pPrint solverSettings
 
       putStrLn "-------------------- localPackages --------------------"
-      for_ localPackages $ pPrint' . fmap srcpkgPackageId
+      for_ localPackages $ PrettyPrint.pPrint . fmap srcpkgPackageId
 
       putStrLn "-------------------- localPackagesEnabledStanzas --------------------"
-      pPrint' localPackagesEnabledStanzas
+      PrettyPrint.pPrint localPackagesEnabledStanzas
 
       putStrLn "-------------------- compiler --------------------"
-      pPrint' compiler
+      PrettyPrint.pPrint compiler
 
       putStrLn "-------------------- platform --------------------"
-      pPrint' platform
+      PrettyPrint.pPrint platform
 
       putStrLn "-------------------- configuredPrograms --------------------"
-      pPrint' configuredPrograms
+      PrettyPrint.pPrint configuredPrograms
 
       putStrLn "-------------------- solverPlan --------------------"
       putStrLn $ SIP.showInstallPlan solverPlan
 
       putStrLn "-------------------- totalIndexState --------------------"
-      pPrint' totalIndexState
+      PrettyPrint.pPrint totalIndexState
 
       putStrLn "-------------------- activeRepos --------------------"
-      pPrint' activeRepos
+      PrettyPrint.pPrint activeRepos

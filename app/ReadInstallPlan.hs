@@ -10,15 +10,12 @@ import Distribution.Client.ProjectConfig (ProjectConfig)
 import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, ElaboratedSharedConfig)
 import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
 import Opts (parseOpts)
-import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
+import PrettyPrint (pPrint)
 import WithCacheFile (withCacheFile)
 
 type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
 
 type Value = (ElaboratedInstallPlan, ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
-
-pPrint' :: Show a => a -> IO ()
-pPrint' = pPrintOpt NoCheckColorTty defaultOutputOptionsDarkBg {outputOptionsCompact = True, outputOptionsCompactParens = True}
 
 main :: IO ()
 main = do
@@ -34,25 +31,25 @@ main = do
       let (improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) = v
 
       putStrLn "-------------------- projectConfig --------------------"
-      pPrint' projectConfig
+      pPrint projectConfig
 
       putStrLn "-------------------- localPackages --------------------"
-      pPrint' localPackages
+      pPrint localPackages
 
       putStrLn "-------------------- progSearchPath --------------------"
-      pPrint' progSearchPath
+      pPrint progSearchPath
 
       putStrLn "-------------------- elaboratedInstallPlan --------------------"
-      for_ (toList elaboratedPlan) pPrint'
+      for_ (toList elaboratedPlan) pPrint
 
       putStrLn "-------------------- elaboratedInstallPlan --------------------"
-      for_ (toList improvedPlan) pPrint'
+      for_ (toList improvedPlan) pPrint
 
       putStrLn "-------------------- elaboratedSharedConfig --------------------"
-      pPrint' elaboratedSharedConfig
+      pPrint elaboratedSharedConfig
 
       putStrLn "-------------------- totalIndexState --------------------"
-      pPrint' totalIndexState
+      pPrint totalIndexState
 
       putStrLn "-------------------- activeRepos --------------------"
-      pPrint' activeRepos
+      pPrint activeRepos

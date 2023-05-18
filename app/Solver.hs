@@ -1,22 +1,37 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# HLINT ignore "Use <$>" #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# HLINT ignore "Use <$>" #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Monad.Writer.CPS (MonadWriter (..), execWriter)
+import Data.Coerce (coerce)
 import Data.Foldable
+import Data.Functor.Foldable (Base, Recursive (..))
 import Data.List (nub)
+import Data.Map.Monoidal.Strict qualified as MonoidalMap
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Semialign qualified as Semialign
 import Data.Set (Set)
 import Data.Set qualified as Set
+import Data.String (IsString, fromString)
+import Data.These (fromThese)
 import Distribution.CabalSpecVersion (CabalSpecVersion, cabalSpecLatest, cabalSpecMinimumLibraryVersion)
 import Distribution.Client.Dependency hiding (removeLowerBounds, removeUpperBounds)
 import Distribution.Client.HttpUtils
@@ -34,11 +49,11 @@ import Distribution.Client.Types.SourcePackageDb
 import Distribution.Client.Utils (incVersion)
 import Distribution.Compat.Graph (nodeKey)
 import Distribution.Compat.Lens
-import Distribution.InstalledPackageInfo (InstalledPackageInfo (..))
+import Distribution.InstalledPackageInfo (InstalledPackageInfo (..), installedComponentId, sourceComponentName)
 import Distribution.Package (Package (packageId), packageName)
 import Distribution.PackageDescription qualified as PD hiding (setupBuildInfo)
 import Distribution.PackageDescription.Configuration qualified as PD
-import Distribution.Pretty (prettyShow)
+import Distribution.Pretty qualified as Cabal
 import Distribution.Simple.Compiler
 import Distribution.Simple.Flag qualified as Flag
 import Distribution.Simple.GHC qualified as GHC
@@ -49,18 +64,20 @@ import Distribution.Solver.Modular (PruneAfterFirstSuccess (..), SolverConfig (.
 import Distribution.Solver.Modular.Assignment (toCPs)
 import Distribution.Solver.Modular.ConfiguredConversion (convCP)
 import Distribution.Solver.Modular.Dependency
-import Distribution.Solver.Modular.Index (PInfo (..))
+import Distribution.Solver.Modular.Flag
+import Distribution.Solver.Modular.Index (ComponentInfo (ComponentInfo), IsBuildable (IsBuildable), IsVisible (IsVisible), PInfo (..))
 import Distribution.Solver.Modular.IndexConversion
-import Distribution.Solver.Modular.Log
+import Distribution.Solver.Modular.Log (SolverFailure (BackjumpLimitReached, ExhaustiveSearch))
 import Distribution.Solver.Modular.Message (showMessages)
 import Distribution.Solver.Modular.Package
 import Distribution.Solver.Modular.RetryLog (toProgress)
 import Distribution.Solver.Modular.Solver (solve)
+import Distribution.Solver.Types.ComponentDeps (Component)
 import Distribution.Solver.Types.ConstraintSource (ConstraintSource (..))
 import Distribution.Solver.Types.InstalledPreference (InstalledPreference)
 import Distribution.Solver.Types.InstalledPreference qualified as Preference
 import Distribution.Solver.Types.LabeledPackageConstraint
-import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..))
+import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..), showStanza)
 import Distribution.Solver.Types.PackageConstraint (ConstraintScope (ScopeAnySetupQualifier), scopeToPackageName)
 import Distribution.Solver.Types.PackageIndex qualified as Solver.PackageIndex
 import Distribution.Solver.Types.PackagePreferences (PackagePreferences (..))
@@ -77,9 +94,11 @@ import Distribution.Types.PackageVersionConstraint
 import Distribution.Utils.Generic (ordNubBy)
 import Distribution.Verbosity as Verbosity
 import Distribution.Version
+import GHC.Generics (Generic)
 import Opts (parseOpts)
+import PrettyPrint (pPrint)
+import Prettyprinter
 import SourcePackage.Lens
-import Text.Pretty.Simple (pPrint)
 
 main :: IO ()
 main = do
@@ -125,7 +144,6 @@ main = do
   pkgConfigDb <- readPkgConfigDb verbosity progDb
 
   let corePackageDbs = applyPackageDbFlags [GlobalPackageDB] (projectConfigPackageDBs projectConfigShared)
-  pPrint corePackageDbs
 
   installedPkgIndex <-
     IndexUtils.getInstalledPackages
@@ -133,6 +151,25 @@ main = do
       compiler
       corePackageDbs
       progDb
+
+  let installedPackages =
+        foldl'
+          (flip Cabal.PackageIndex.deleteSourcePackageId)
+          installedPkgIndex
+          [packageId pkg | SpecificSourcePackage pkg <- localPackages]
+
+  when False $ do
+    putStrLn "------------------------------------"
+    putStrLn "----- installed packages index -----"
+    putStrLn "------------------------------------"
+    putStrLn ""
+    for_ (Cabal.PackageIndex.allPackages installedPkgIndex) $ \ipi -> do
+      putStrLn $ "unit-id: " ++ Cabal.prettyShow (installedUnitId ipi)
+      putStrLn $ "installed-component-id: " ++ Cabal.prettyShow (installedComponentId ipi)
+      putStrLn $ "source-package-id: " ++ Cabal.prettyShow (sourcePackageId ipi)
+      putStrLn $ "component-name: " ++ Cabal.prettyShow (sourceComponentName ipi)
+      putStrLn $ "visibility: " ++ Cabal.prettyShow (libVisibility ipi)
+      putStrLn ""
 
   (sourcePkgDb, totalIndexState, activeRepos) <-
     projectConfigWithSolverRepoContext verbosity projectConfigShared (projectConfigBuildOnly projectConfig) $ \repoctx ->
@@ -142,11 +179,25 @@ main = do
         solverSettingIndexState
         solverSettingActiveRepos
 
-  pPrint totalIndexState
-  pPrint activeRepos
+  putStrLn "------------------------"
+  putStrLn "----- repositories -----"
+  putStrLn "------------------------"
+  putStrLn $ "index-state: " ++ Cabal.prettyShow totalIndexState
+  putStrLn $ "active-repositories: " ++ Cabal.prettyShow activeRepos
+  putStrLn ""
 
   let platform@(Platform arch os) = fromMaybe (Platform buildArch buildOS) mPlatform
   let SourcePackageDb sourcePkgIndex sourcePkgPrefs = sourcePkgDb
+
+  let sourcePackages =
+        removeLowerBounds solverSettingAllowOlder $
+          removeUpperBounds solverSettingAllowNewer $
+            fmap (applyDefaultSetupDeps compiler platform) $
+              -- add local packages to sourcePkgIndex
+              foldl'
+                (flip Solver.PackageIndex.insert)
+                sourcePkgIndex
+                [pkg | SpecificSourcePackage pkg <- localPackages]
 
   let pkgStanzasEnabled = localPackagesEnabledStanzas projectConfig localPackages
 
@@ -221,6 +272,9 @@ main = do
           ++
           -- enable stanza preference unilaterally, regardless if the user asked
           -- accordingly or expressed no preference, to help hint the solver
+
+          -- enable stanza preference unilaterally, regardless if the user asked
+          -- accordingly or expressed no preference, to help hint the solver
           [ PackageStanzasPreference pkgname stanzas
             | pkg <- localPackages,
               let pkgname = pkgSpecifierTarget pkg
@@ -244,32 +298,7 @@ main = do
             else PreferLatestForSelected
         )
 
-  let sourcePackages =
-        removeLowerBounds solverSettingAllowOlder $
-          removeUpperBounds solverSettingAllowNewer $
-            fmap (applyDefaultSetupDeps compiler platform) $
-              -- add local packages to sourcePkgIndex
-              foldl
-                (flip Solver.PackageIndex.insert)
-                sourcePkgIndex
-                [pkg | SpecificSourcePackage pkg <- localPackages]
-
   let targets = Set.fromList $ map pkgSpecifierTarget localPackages
-
-  let installedPackages =
-        foldl'
-          (flip Cabal.PackageIndex.deleteSourcePackageId)
-          installedPkgIndex
-          [packageId pkg | SpecificSourcePackage pkg <- localPackages]
-
-  putStrLn "----- installedPkgIndex -----"
-  for_ (Cabal.PackageIndex.allPackages installedPkgIndex) $ \ipi -> do
-    putStrLn "-----"
-    putStrLn $ prettyShow $ sourcePackageId ipi
-    print $ sourceLibName ipi
-    putStrLn $ prettyShow $ installedComponentId_ ipi
-    putStrLn $ prettyShow $ libVisibility ipi
-    putStrLn $ prettyShow $ installedUnitId ipi
 
   -- Constraints have to be converted into a finite map indexed by PN.
   let gcs =
@@ -291,9 +320,35 @@ main = do
           installedPackages
           sourcePackages
 
+  putStrLn "------------------------"
+  putStrLn "----- solver index -----"
+  putStrLn "------------------------"
+  putStrLn ""
+
   for_ (Map.toList idx) $ \(pn, mipi) ->
-    for_ (Map.keys mipi) $ \(I ver loc) ->
-      putStrLn $ unwords [prettyShow (PackageIdentifier pn ver), show loc]
+    for_ (Map.toList mipi) $ \(I ver loc, PInfo deps mec flagInfo _mfail) -> do
+      print $
+        vsep $
+          [ fromString $ Cabal.prettyShow pn ++ "-" ++ showI (I ver loc),
+            "exposed components:" <+> hsep (punctuate comma [prettyExposedComponentInfo ec ci | (ec, ci) <- Map.toList mec])
+          ]
+            ++ ( if Map.null flagInfo
+                   then []
+                   else
+                     [ "flags:" <+> hsep (punctuate comma [(fromString (Cabal.prettyShow fn)) | (fn, _fi) <- Map.toList flagInfo])
+                     ]
+               )
+            ++ [ "dependencies:",
+                 indent 2 $
+                   vsep
+                     [ vsep
+                         [ fromString (Cabal.prettyShow c) <+> "depends on",
+                           indent 2 $ prettyComponentFlaggedDeps dep,
+                           line
+                         ]
+                       | (c, dep) <- (Map.toList $ toComponents deps)
+                     ]
+               ]
 
   let solverConfig =
         SolverConfig
@@ -320,7 +375,7 @@ main = do
 
   foldProgress
     (\step rest -> putStrLn step >> rest)
-    pPrint
+    (putStrLn . prettySolverFailure)
     ( \(a, rdm) -> do
         pPrint a
         pPrint rdm
@@ -676,7 +731,7 @@ defaultSetupDeps compiler platform pkg =
       error $
         "defaultSetupDeps: called for a package with explicit "
           ++ "setup deps: "
-          ++ prettyShow (packageId pkg)
+          ++ Cabal.prettyShow (packageId pkg)
   where
     -- we require one less
     --
@@ -772,16 +827,216 @@ basePkgname = mkPackageName "base"
 cabalPkgname :: PD.PackageName
 cabalPkgname = mkPackageName "cabal"
 
-deriving instance Show PInfo
+--
+--
 
-deriving instance Show (FlaggedDep PN)
+newtype My a = My a
 
-deriving instance Show (LDep PN)
+myPretty :: Pretty (My a) => a -> Doc ann
+myPretty = pretty . My
 
-deriving instance Show (Dep PN)
+instance Cabal.Pretty qpn => Prettyprinter.Pretty (My (FlaggedDep qpn)) where
+  pretty (My (Simple (LDep _dependencyReason dep) component)) =
+    fromString (Cabal.prettyShow component) <+> "depends on" <+> myPretty dep
+  pretty (My (Flagged (FN pn flag) _finfo trueDeps falseDeps))
+    | null trueDeps && null falseDeps =
+        mempty
+    | null falseDeps =
+        "when"
+          <+> fromString (Cabal.prettyShow pn <> ":" <> Cabal.prettyShow flag)
+            <> line
+            <> indent 2 (vsep (map myPretty trueDeps))
+    | null trueDeps =
+        "unless"
+          <+> fromString (Cabal.prettyShow pn <> ":" <> Cabal.prettyShow flag)
+            <> line
+            <> indent 2 (vsep (map myPretty falseDeps))
+    | otherwise =
+        "if"
+          <+> fromString (Cabal.prettyShow pn <> ":" <> Cabal.prettyShow flag)
+            <> line
+            <> indent 2 ("then" <+> align (vsep (map myPretty trueDeps)))
+            <> line
+            <> indent 2 ("else" <+> align (vsep (map myPretty falseDeps)))
+  pretty (My (Stanza (SN _pn stanza) trueDeps))
+    | null trueDeps =
+        mempty
+    | otherwise =
+        "when"
+          <+> fromString (showStanza stanza)
+          <+> "is enabled"
+            <> line
+            <> indent 2 (vsep (map myPretty trueDeps))
 
-deriving instance Show SolverFailure
+-- prettyFlaggedDeps :: Cabal.Pretty qpn => FlaggedDeps qpn -> Doc ann
+-- prettyFlaggedDeps deps =
+--   align (vsep [myPretty dep | dep <- deps, not (isNull dep)])
+--   where
+--     isNull (Flagged _fn _fInfo trueDeps falseDeps) | null trueDeps && null falseDeps = True
+--     isNull (Stanza _sn trueDeps) | null trueDeps = True
+--     isNull _otherwise = False
 
-deriving instance Show LabeledPackageConstraint
+instance Cabal.Pretty qpn => Pretty (My (Dep qpn)) where
+  pretty (My (Dep pkgC ci)) =
+    fromString (prettyPkgC pkgC) <+> prettyCI ci
+  pretty (My (Ext extension)) =
+    "extension" <+> fromString (show extension)
+  pretty (My (Lang language)) =
+    "language" <+> fromString (show language)
+  pretty (My (Pkg pkgConfigName pkgConfigVR)) =
+    fromString (Cabal.prettyShow pkgConfigName) <+> fromString (Cabal.prettyShow pkgConfigVR)
 
-deriving instance Show PackagePreference
+prettySolverFailure :: SolverFailure -> String
+prettySolverFailure BackjumpLimitReached = "BackjumpLimitReached!"
+prettySolverFailure (ExhaustiveSearch cs cm) = "ExhaustiveSearch! conflict set: " ++ show cs ++ " conflict map: " ++ show cm
+
+prettyCI :: CI -> Doc ann
+prettyCI (Fixed i) = "fixed" <+> fromString (showI i)
+prettyCI (Constrained vr) | isAnyVersion vr = ""
+prettyCI (Constrained vr) | otherwise = fromString (Cabal.prettyShow vr)
+
+prettyEC :: IsString a => ExposedComponent -> a
+prettyEC (ExposedLib libName) = fromString $ Cabal.prettyShow $ PD.CLibName libName
+prettyEC (ExposedExe exeName) = fromString $ Cabal.prettyShow $ PD.CExeName exeName
+
+prettyPkgC :: Cabal.Pretty qpn => PkgComponent qpn -> String
+prettyPkgC (PkgComponent pn ec) = Cabal.prettyShow pn <> ":" <> prettyEC ec
+
+prettyExposedComponentInfo :: ExposedComponent -> ComponentInfo -> Doc ann
+prettyExposedComponentInfo ec ci = prettyEC ec <+> "(" <> prettyCompInfo ci <> ")"
+  where
+    prettyCompInfo (ComponentInfo visible buildable) = hsep [prettyIV visible, prettyIB buildable]
+
+    prettyIV (IsVisible True) = "visible"
+    prettyIV (IsVisible False) = mempty
+
+    prettyIB (IsBuildable True) = "buildable"
+    prettyIB (IsBuildable False) = mempty
+
+deriving instance Show qpn => Show (FlaggedDep qpn)
+
+deriving instance Show qpn => Show (Dep qpn)
+
+deriving instance Show qpn => Show (LDep qpn)
+
+newtype RecursiveFlaggedDep qpn = RecursiveFlaggedDep (FlaggedDep qpn)
+
+type instance Base (RecursiveFlaggedDep qpn) = RecursiveFlaggedDepF qpn
+
+data RecursiveFlaggedDepF qpn f
+  = RecursiveFlaggedF (FN qpn) FInfo [f] [f]
+  | RecursiveSimpleF (LDep qpn) Component
+  | RecursiveStanzaF (SN qpn) [f]
+  deriving (Functor, Generic)
+
+instance Recursive (RecursiveFlaggedDep qpn) where
+  project (RecursiveFlaggedDep (Flagged fn fInfo trueDeps falseDeps)) =
+    RecursiveFlaggedF fn fInfo (coerce trueDeps) (coerce falseDeps)
+  project (RecursiveFlaggedDep (Simple lDep comp)) =
+    RecursiveSimpleF lDep comp
+  project (RecursiveFlaggedDep (Stanza sn trueDeps)) =
+    RecursiveStanzaF sn (coerce trueDeps)
+
+type ComponentFlaggedDeps qpn = [ComponentFlaggedDep qpn]
+
+data ComponentFlaggedDep qpn
+  = ComponentSimple
+      (LDep qpn)
+  | ComponentFlagged
+      (FN qpn)
+      FInfo
+      [ComponentFlaggedDep qpn]
+      -- ^ trueDeps
+      [ComponentFlaggedDep qpn]
+      -- ^ falseDeps
+  | ComponentStanza
+      (SN qpn)
+      [ComponentFlaggedDep qpn]
+  deriving (Show)
+
+toComponents :: FlaggedDeps qpn -> Map Component (ComponentFlaggedDeps qpn)
+toComponents = coerce . foldMap (cata go . RecursiveFlaggedDep)
+  where
+    go (RecursiveFlaggedF fn fInfo trueDeps falseDeps) =
+      Semialign.alignWith
+        (\theseDeps -> [uncurry (ComponentFlagged fn fInfo) $ fromThese [] [] theseDeps])
+        (mconcat trueDeps)
+        (mconcat falseDeps)
+    go (RecursiveSimpleF lDep comp) =
+      MonoidalMap.singleton comp [ComponentSimple lDep]
+    go (RecursiveStanzaF sn trueDeps) =
+      fmap (\deps -> [ComponentStanza sn deps]) $ mconcat trueDeps
+
+instance Cabal.Pretty qpn => Pretty (ComponentFlaggedDep qpn) where
+  pretty (ComponentSimple (LDep _dependencyReason dep)) =
+    myPretty dep
+  pretty (ComponentFlagged (FN pn flag) _finfo trueDeps falseDeps)
+    | null trueDeps && null falseDeps =
+        mempty
+    | null falseDeps =
+        "when"
+          <+> fromString (Cabal.prettyShow pn <> ":" <> Cabal.prettyShow flag)
+            <> line
+            <> indent 2 (vsep (map pretty trueDeps))
+    | null trueDeps =
+        "unless"
+          <+> fromString (Cabal.prettyShow pn <> ":" <> Cabal.prettyShow flag)
+            <> line
+            <> indent 2 (vsep (map pretty falseDeps))
+    | otherwise =
+        "if"
+          <+> fromString (Cabal.prettyShow pn <> ":" <> Cabal.prettyShow flag)
+            <> line
+            <> indent 2 ("then" <+> align (vsep (map pretty trueDeps)))
+            <> line
+            <> indent 2 ("else" <+> align (vsep (map pretty falseDeps)))
+  pretty (ComponentStanza (SN _pn stanza) trueDeps)
+    | null trueDeps =
+        mempty
+    | otherwise =
+        "when"
+          <+> fromString (showStanza stanza)
+          <+> "is enabled"
+            <> line
+            <> indent 2 (vsep (map pretty trueDeps))
+
+prettyComponentFlaggedDeps :: Cabal.Pretty qpn => ComponentFlaggedDeps qpn -> Doc ann
+prettyComponentFlaggedDeps deps =
+  align (vsep [pretty dep | dep <- deps, not (isNull dep)])
+  where
+    isNull (ComponentFlagged _fn _fInfo trueDeps falseDeps) | null trueDeps && null falseDeps = True
+    isNull (ComponentStanza _sn trueDeps) | null trueDeps = True
+    isNull _otherwise = False
+
+-- flaggedDepQPN :: Traversal (FlaggedDep a) (FlaggedDep b) a b
+-- flaggedDepQPN f (Simple lDep component) =
+--   Simple <$> lDepQPN f lDep <*> pure component
+-- flaggedDepQPN f (Flagged fn fInfo trueDeps falseDeps) =
+--   Flagged <$> fnQPN f fn <*> pure fInfo <*> (traverse . flaggedDepQPN) f trueDeps <*> (traverse . flaggedDepQPN) f falseDeps
+-- flaggedDepQPN f (Stanza sn trueDeps) =
+--   Stanza <$> snQPN f sn <*> (traverse . flaggedDepQPN) f trueDeps
+--
+-- flaggedDepComponent :: Traversal' (FlaggedDep qpn) Component
+-- flaggedDepComponent f (Simple lDep component) =
+--   Simple lDep <$> f component
+-- flaggedDepComponent f (Flagged fn fInfo trueDeps falseDeps) =
+--   Flagged fn fInfo <$> (traverse . flaggedDepComponent) f trueDeps <*> (traverse . flaggedDepComponent) f falseDeps
+-- flaggedDepComponent f (Stanza sn trueDeps) =
+--   Stanza sn <$> (traverse . flaggedDepComponent) f trueDeps
+-- lDepQPN :: Traversal (LDep a) (LDep b) a b
+-- lDepQPN f (LDep depr dep) = LDep <$> dependecyReasonQPN f depr <*> depQPN f dep
+--
+-- depQPN :: Traversal (Dep a) (Dep b) a b
+-- depQPN f (Dep (PkgComponent qpn ec) ci) = Dep <$> (PkgComponent <$> f qpn <*> pure ec) <*> pure ci
+-- depQPN _ (Ext e) = pure (Ext e)
+-- depQPN _ (Lang l) = pure (Lang l)
+-- depQPN _ (Pkg pn pv) = pure (Pkg pn pv)
+--
+-- dependecyReasonQPN :: Traversal (DependencyReason a) (DependencyReason b) a b
+-- dependecyReasonQPN f (DependencyReason qpn m s) = DependencyReason <$> f qpn <*> pure m <*> pure s
+--
+-- fnQPN :: Traversal (FN a) (FN b) a b
+-- fnQPN f (FN qpn flag) = FN <$> f qpn <*> pure flag
+--
+-- snQPN :: Traversal (SN a) (SN b) a b
+-- snQPN f (SN qpn stanza) = SN <$> f qpn <*> pure stanza
