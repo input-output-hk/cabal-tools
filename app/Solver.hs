@@ -158,7 +158,7 @@ main = do
           installedPkgIndex
           [packageId pkg | SpecificSourcePackage pkg <- localPackages]
 
-  when False $ do
+  when True $ do
     putStrLn "------------------------------------"
     putStrLn "----- installed packages index -----"
     putStrLn "------------------------------------"
@@ -320,35 +320,7 @@ main = do
           installedPackages
           sourcePackages
 
-  putStrLn "------------------------"
-  putStrLn "----- solver index -----"
-  putStrLn "------------------------"
-  putStrLn ""
-
-  for_ (Map.toList idx) $ \(pn, mipi) ->
-    for_ (Map.toList mipi) $ \(I ver loc, PInfo deps mec flagInfo _mfail) -> do
-      print $
-        vsep $
-          [ fromString $ Cabal.prettyShow pn ++ "-" ++ showI (I ver loc),
-            "exposed components:" <+> hsep (punctuate comma [prettyExposedComponentInfo ec ci | (ec, ci) <- Map.toList mec])
-          ]
-            ++ ( if Map.null flagInfo
-                   then []
-                   else
-                     [ "flags:" <+> hsep (punctuate comma [(fromString (Cabal.prettyShow fn)) | (fn, _fi) <- Map.toList flagInfo])
-                     ]
-               )
-            ++ [ "dependencies:",
-                 indent 2 $
-                   vsep
-                     [ vsep
-                         [ fromString (Cabal.prettyShow c) <+> "depends on",
-                           indent 2 $ prettyComponentFlaggedDeps dep,
-                           line
-                         ]
-                       | (c, dep) <- (Map.toList $ toComponents deps)
-                     ]
-               ]
+  printSolverIndex idx
 
   let solverConfig =
         SolverConfig
@@ -1040,3 +1012,31 @@ prettyComponentFlaggedDeps deps =
 --
 -- snQPN :: Traversal (SN a) (SN b) a b
 -- snQPN f (SN qpn stanza) = SN <$> f qpn <*> pure stanza
+
+printSolverIndex :: Cabal.Pretty pn => Map pn (Map I PInfo) -> IO ()
+printSolverIndex idx = do
+  putStrLn "------------------------"
+  putStrLn "----- solver index -----"
+  putStrLn "------------------------"
+  putStrLn ""
+
+  for_ (Map.toList idx) $ \(pn, mipi) ->
+    for_ (Map.toList mipi) $ \(i, PInfo deps mec flagInfo _mfail) -> do
+      print $
+        vsep $
+          [ fromString $ Cabal.prettyShow pn ++ "-" ++ showI i,
+            "exposed components:" <+> hsep (punctuate comma [prettyExposedComponentInfo ec ci | (ec, ci) <- Map.toList mec])
+          ]
+            ++ [ "flags:" <+> hsep (punctuate comma [(fromString (Cabal.prettyShow fn)) | (fn, _fi) <- Map.toList flagInfo])
+               ]
+            ++ [ "dependencies:",
+                 indent 2 $
+                   vsep
+                     [ vsep
+                         [ fromString (Cabal.prettyShow c) <+> "depends on",
+                           indent 2 $ prettyComponentFlaggedDeps dep,
+                           line
+                         ]
+                       | (c, dep) <- (Map.toList $ toComponents deps)
+                     ]
+               ]
