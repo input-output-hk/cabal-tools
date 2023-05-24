@@ -17,7 +17,7 @@ prettySolverFailure :: SolverFailure -> String
 prettySolverFailure BackjumpLimitReached = "BackjumpLimitReached!"
 prettySolverFailure (ExhaustiveSearch cs cm) = "ExhaustiveSearch! conflict set: " ++ show cs ++ " conflict map: " ++ show cm
 
-printSolverIndex :: Pretty a => Map.Map a (Map.Map I PInfo) -> IO ()
+printSolverIndex :: Index -> IO ()
 printSolverIndex idx = do
   putStrLn "------------------------"
   putStrLn "----- solver index -----"
@@ -34,7 +34,7 @@ printSolverIndex idx = do
             "exposed components:"
               <+> hsep (punctuate comma [prettyExposedComponentInfo ec ci | (ec, ci) <- Map.toList mec])
           ]
-            ++ [ "flags:" <+> hsep (punctuate comma [(fromString (Cabal.prettyShow fn)) | (fn, _fi) <- Map.toList flagInfo])
+            ++ [ "flags:" <+> hsep (punctuate comma [pretty fn | (fn, _fi) <- Map.toList flagInfo])
                ]
             ++ [ "dependencies:",
                  indent 2 $
@@ -44,6 +44,6 @@ printSolverIndex idx = do
                            indent 2 $ prettyComponentFlaggedDeps dep,
                            line
                          ]
-                       | (c, dep) <- (Map.toList $ toComponents deps)
+                       | (c, dep) <- Map.toList $ toComponents deps
                      ]
                ]

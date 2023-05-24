@@ -1,16 +1,9 @@
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE ImportQualifiedPost #-}
-{-# LANGUAGE LambdaCase #-}
+{-# HLINT ignore "Use <$>" #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-{-# HLINT ignore "Use <$>" #-}
+{-# HLINT ignore "Redundant $" #-}
 
 import Control.Monad (unless, when)
 import Control.Monad.Writer.CPS (MonadWriter (..), execWriter)
@@ -21,24 +14,21 @@ import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Dependency (removeLowerBounds, removeUpperBounds)
-import Distribution.CabalSpecVersion (CabalSpecVersion, cabalSpecLatest, cabalSpecMinimumLibraryVersion)
 import Distribution.Client.Dependency hiding (removeLowerBounds, removeUpperBounds)
 import Distribution.Client.HttpUtils
 import Distribution.Client.IndexUtils
 import Distribution.Client.IndexUtils qualified as IndexUtils
 import Distribution.Client.ProjectConfig
 import Distribution.Client.ProjectPlanning
-import Distribution.Client.ProjectPlanning.Types (SetupScriptStyle (..))
-import Distribution.Client.Targets (userToPackageConstraint)
+import Distribution.Client.Targets (UserConstraint, userToPackageConstraint)
 import Distribution.Client.Types (UnresolvedSourcePackage, pkgSpecifierTarget)
 import Distribution.Client.Types.PackageLocation (PackageLocation (..))
 import Distribution.Client.Types.PackageSpecifier (pkgSpecifierConstraints)
 import Distribution.Client.Types.SourcePackageDb
 import Distribution.Client.Utils (incVersion)
 import Distribution.Compat.Graph (nodeKey)
-import Distribution.Compat.Lens
 import Distribution.InstalledPackageInfo (InstalledPackageInfo (..), installedComponentId, sourceComponentName)
-import Distribution.Package (Package (packageId), packageName)
+import Distribution.Package (Package (packageId))
 import Distribution.PackageDescription qualified as PD hiding (setupBuildInfo)
 import Distribution.Pretty qualified as Cabal
 import Distribution.Simple.Compiler
@@ -48,10 +38,13 @@ import Distribution.Simple.PackageIndex qualified as Cabal.PackageIndex
 import Distribution.Simple.Program (defaultProgramDb)
 import Distribution.Simple.Utils (cabalVersion)
 import Distribution.Solver.Modular (PruneAfterFirstSuccess (..), SolverConfig (..))
-import Distribution.Solver.Modular.Assignment (toCPs)
+import Distribution.Solver.Modular.Assignment (Assignment, toCPs)
 import Distribution.Solver.Modular.ConfiguredConversion (convCP)
+import Distribution.Solver.Modular.Dependency
+import Distribution.Solver.Modular.Index qualified as Solver
 import Distribution.Solver.Modular.IndexConversion
-import Distribution.Solver.Modular.Message (showMessages)
+import Distribution.Solver.Modular.Log
+import Distribution.Solver.Modular.Message (Message, showMessages)
 import Distribution.Solver.Modular.Package
 import Distribution.Solver.Modular.RetryLog (toProgress)
 import Distribution.Solver.Modular.Solver (solve)
@@ -67,19 +60,15 @@ import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
 import Distribution.Solver.Types.Settings (AvoidReinstalls (..), EnableBackjumping (..), ShadowPkgs (..), SolveExecutables (SolveExecutables), StrongFlags (StrongFlags))
 import Distribution.Solver.Types.SourcePackage (SourcePackage (SourcePackage))
 import Distribution.Solver.Types.SourcePackage qualified as SP
-import Distribution.System (OS (Windows), Platform (..), buildArch, buildOS)
-import Distribution.Types.Dependency (Dependency (Dependency), mainLibSet)
-import Distribution.Types.GenericPackageDescription.Lens
-import Distribution.Types.PackageDescription qualified as PD
-import Distribution.Types.PackageDescription.Lens
+import Distribution.System (Platform (..), buildArch, buildOS)
 import Distribution.Types.PackageVersionConstraint
 import Distribution.Utils.Generic (ordNubBy)
 import Distribution.Verbosity as Verbosity
 import Distribution.Version
 import Opts (parseOpts)
 import PrettyPrintSimple (pPrint)
+import SetupDeps (applyDefaultSetupDeps, cabalPkgname)
 import SolverIndex (prettySolverFailure, printSolverIndex)
-import SourcePackage.Lens
 
 main :: IO ()
 main = do
@@ -95,36 +84,15 @@ main = do
       distDirLayout
       mempty
 
-  let ProjectConfig {projectConfigShared} = projectConfig
+  let ProjectConfig {projectConfigShared, projectConfigBuildOnly} = projectConfig
+      ProjectConfigShared {projectConfigPackageDBs} = projectConfigShared
 
-  let SolverSettings
-        { solverSettingConstraints,
-          solverSettingPreferences,
-          solverSettingFlagAssignment,
-          solverSettingFlagAssignments,
-          solverSettingAllowOlder,
-          solverSettingAllowNewer,
-          solverSettingMaxBackjumps,
-          solverSettingReorderGoals,
-          solverSettingCountConflicts,
-          solverSettingFineGrainedConflicts,
-          solverSettingMinimizeConflictSet,
-          solverSettingStrongFlags,
-          solverSettingAllowBootLibInstalls,
-          solverSettingOnlyConstrained,
-          solverSettingIndexState,
-          solverSettingActiveRepos,
-          solverSettingIndependentGoals,
-          solverSettingPreferOldest
-        } = resolveSolverSettings projectConfig
+  let corePackageDbs :: PackageDBStack
+      corePackageDbs = applyPackageDbFlags [GlobalPackageDB] projectConfigPackageDBs
 
   (compiler, mPlatform, progDb) <- GHC.configure verbosity Nothing Nothing defaultProgramDb
 
-  let cinfo = compilerInfo compiler
-
   pkgConfigDb <- readPkgConfigDb verbosity progDb
-
-  let corePackageDbs = applyPackageDbFlags [GlobalPackageDB] (projectConfigPackageDBs projectConfigShared)
 
   installedPkgIndex <-
     IndexUtils.getInstalledPackages
@@ -152,8 +120,29 @@ main = do
       putStrLn $ "visibility: " ++ Cabal.prettyShow (libVisibility ipi)
       putStrLn ""
 
+  let SolverSettings
+        { solverSettingConstraints,
+          solverSettingPreferences,
+          solverSettingFlagAssignment,
+          solverSettingFlagAssignments,
+          solverSettingAllowOlder,
+          solverSettingAllowNewer,
+          solverSettingMaxBackjumps,
+          solverSettingReorderGoals,
+          solverSettingCountConflicts,
+          solverSettingFineGrainedConflicts,
+          solverSettingMinimizeConflictSet,
+          solverSettingStrongFlags,
+          solverSettingAllowBootLibInstalls,
+          solverSettingOnlyConstrained,
+          solverSettingIndexState,
+          solverSettingActiveRepos,
+          solverSettingIndependentGoals,
+          solverSettingPreferOldest
+        } = resolveSolverSettings projectConfig
+
   (sourcePkgDb, totalIndexState, activeRepos) <-
-    projectConfigWithSolverRepoContext verbosity projectConfigShared (projectConfigBuildOnly projectConfig) $ \repoctx ->
+    projectConfigWithSolverRepoContext verbosity projectConfigShared projectConfigBuildOnly $ \repoctx ->
       getSourcePackagesAtIndexState
         verbosity
         repoctx
@@ -168,108 +157,47 @@ main = do
   putStrLn ""
 
   let platform@(Platform arch os) = fromMaybe (Platform buildArch buildOS) mPlatform
-  let SourcePackageDb sourcePkgIndex sourcePkgPrefs = sourcePkgDb
 
-  let sourcePackages =
-        removeLowerBounds solverSettingAllowOlder $
-          removeUpperBounds solverSettingAllowNewer $
-            fmap (applyDefaultSetupDeps compiler platform) $
-              -- add local packages to sourcePkgIndex
-              foldl'
-                (flip Solver.PackageIndex.insert)
-                sourcePkgIndex
-                [pkg | SpecificSourcePackage pkg <- localPackages]
+      SourcePackageDb sourcePkgIndex sourcePkgPrefs = sourcePkgDb
 
-  let pkgStanzasEnabled = localPackagesEnabledStanzas projectConfig localPackages
+      sourcePackages :: Solver.PackageIndex.PackageIndex UnresolvedSourcePackage
+      sourcePackages =
+        removeLowerBounds solverSettingAllowOlder
+          $ removeUpperBounds solverSettingAllowNewer
+          $ fmap (applyDefaultSetupDeps compiler platform)
+          -- add local packages to sourcePkgIndex
+          $ ( \idx' ->
+                foldl'
+                  (flip Solver.PackageIndex.insert)
+                  idx'
+                  [pkg | SpecificSourcePackage pkg <- localPackages]
+            )
+          $ sourcePkgIndex
 
-  let constraints = execWriter $ do
-        tell
-          [ LabeledPackageConstraint
-              ( PackageConstraint
-                  (ScopeAnySetupQualifier cabalPkgname)
-                  (PackagePropertyVersion $ orLaterVersion $ setupMinCabalVersion compiler)
-              )
-              ConstraintSetupCabalMinVersion
-          ]
+      pkgStanzasEnabled :: Map.Map PackageName (Map.Map OptionalStanza Bool)
+      pkgStanzasEnabled =
+        localPackagesEnabledStanzas projectConfig localPackages
 
-        tell
-          [ LabeledPackageConstraint
-              ( PackageConstraint
-                  (ScopeAnySetupQualifier cabalPkgname)
-                  (PackagePropertyVersion $ earlierVersion setupMaxCabalVersion)
-              )
-              ConstraintSetupCabalMaxVersion
-          ]
+      constraints :: [LabeledPackageConstraint]
+      constraints =
+        mkConstraints
+          compiler
+          localPackages
+          pkgStanzasEnabled
+          solverSettingConstraints
+          solverSettingFlagAssignments
+          solverSettingFlagAssignment
 
-        -- version constraints from the config file or command line
-        for_ solverSettingConstraints $ \(pc, src) ->
-          tell [LabeledPackageConstraint (userToPackageConstraint pc) src]
+      preferences :: [PackagePreference]
+      preferences =
+        mkPreferences
+          localPackages
+          pkgStanzasEnabled
+          sourcePkgPrefs
+          solverSettingPreferences
 
-        -- enable stanza constraints where the user asked to enable
-        for_ localPackages $ \pkg -> do
-          let pkgname = pkgSpecifierTarget pkg
-              stanzaM = Map.findWithDefault Map.empty pkgname pkgStanzasEnabled
-              stanzas = [stanza | stanza <- [minBound .. maxBound], Map.lookup stanza stanzaM == Just True]
-          unless (null stanzas) $
-            tell
-              [ LabeledPackageConstraint
-                  ( PackageConstraint
-                      (scopeToplevel pkgname)
-                      (PackagePropertyStanzas stanzas)
-                  )
-                  ConstraintSourceConfigFlagOrTarget
-              ]
-
-        -- TODO: [nice to have] should have checked at some point that the package in question actually has these flags.
-        for_ (Map.toList solverSettingFlagAssignments) $ \(pkgname, flags) ->
-          tell
-            [ LabeledPackageConstraint
-                ( PackageConstraint
-                    (scopeToplevel pkgname)
-                    (PackagePropertyFlags flags)
-                )
-                ConstraintSourceConfigFlagOrTarget
-            ]
-
-        -- TODO: [nice to have] we have user-supplied flags for unspecified local packages (as well as specific per-package flags). For the former we just apply all these flags to all local targets which is silly. We should check if the flags are appropriate.
-        for_ localPackages $ \pkg -> do
-          let flags = solverSettingFlagAssignment
-          unless (PD.nullFlagAssignment flags) $ do
-            let pkgname = pkgSpecifierTarget pkg
-            tell
-              [ LabeledPackageConstraint
-                  ( PackageConstraint
-                      (scopeToplevel pkgname)
-                      (PackagePropertyFlags flags)
-                  )
-                  ConstraintSourceConfigFlagOrTarget
-              ]
-
-        tell (foldMap pkgSpecifierConstraints localPackages)
-
-  let preferences =
-        -- preferences from the config file or command line
-        [PackageVersionPreference name ver | PackageVersionConstraint name ver <- solverSettingPreferences]
-          ++
-          -- enable stanza preference unilaterally, regardless if the user asked
-          -- accordingly or expressed no preference, to help hint the solver
-
-          -- enable stanza preference unilaterally, regardless if the user asked
-          -- accordingly or expressed no preference, to help hint the solver
-          [ PackageStanzasPreference pkgname stanzas
-            | pkg <- localPackages,
-              let pkgname = pkgSpecifierTarget pkg
-                  stanzaM = Map.findWithDefault Map.empty pkgname pkgStanzasEnabled
-                  stanzas =
-                    [ stanza | stanza <- [minBound .. maxBound], Map.lookup stanza stanzaM /= Just False
-                    ],
-              not (null stanzas)
-          ]
-          ++ [ PackageVersionPreference name ver
-               | (name, ver) <- Map.toList sourcePkgPrefs
-             ]
-
-  let preferenceDefault =
+      preferenceDefault :: PackagesPreferenceDefault
+      preferenceDefault =
         -- TODO: [required eventually] decide if we need to prefer
         -- installed for global packages, or prefer latest even for
         -- global packages. Perhaps should be configurable but with a
@@ -279,17 +207,22 @@ main = do
             else PreferLatestForSelected
         )
 
-  let targets = Set.fromList $ map pkgSpecifierTarget localPackages
+      targets :: Set PackageName
+      targets = Set.fromList $ map pkgSpecifierTarget localPackages
 
-  -- Constraints have to be converted into a finite map indexed by PN.
-  let gcs =
+      -- Constraints have to be converted into a finite map indexed by PN.
+      gcs :: Map.Map PackageName [LabeledPackageConstraint]
+      gcs =
         Map.fromListWith
           (<>)
           [ (scopeToPackageName scope, [lpc])
             | lpc@(LabeledPackageConstraint (PackageConstraint scope _property) _source) <- constraints
           ]
 
-  let idx =
+      cinfo = compilerInfo compiler
+
+      idx :: Solver.Index
+      idx =
         convPIs
           os
           arch
@@ -323,8 +256,11 @@ main = do
             allowBootLibInstalls = solverSettingAllowBootLibInstalls
           }
 
-  let packagePreferences = interpretPackagesPreference targets preferenceDefault preferences
-  let progress = toProgress $ solve solverConfig cinfo idx pkgConfigDb packagePreferences gcs targets
+      packagePreferences :: PackageName -> PackagePreferences
+      packagePreferences = interpretPackagesPreference targets preferenceDefault preferences
+
+      progress :: Progress Message SolverFailure (Assignment, RevDepMap)
+      progress = toProgress $ solve solverConfig cinfo idx pkgConfigDb packagePreferences gcs targets
 
   foldProgress
     (\step rest -> putStrLn step >> rest)
@@ -335,6 +271,122 @@ main = do
         pPrint $ ordNubBy nodeKey $ map (convCP installedPackages sourcePackages) (toCPs a rdm)
     )
     $ showMessages progress
+
+mkConstraints ::
+  Package pkg =>
+  -- | compiler
+  Compiler ->
+  -- | localPackages
+  [PackageSpecifier pkg] ->
+  -- | pkgStanzasEnabled
+  Map.Map PackageName (Map.Map OptionalStanza Bool) ->
+  -- | ssConstraints
+  [(UserConstraint, ConstraintSource)] ->
+  -- | ssFlagAssignments (?)
+  Map.Map PackageName PD.FlagAssignment ->
+  -- | ssFlagAssignment (?)
+  PD.FlagAssignment ->
+  -- | result
+  [LabeledPackageConstraint]
+mkConstraints compiler localPackages pkgStanzasEnabled ssConstraints ssFlagAssignments ssFlagAssignment =
+  execWriter $ do
+    tell
+      [ LabeledPackageConstraint
+          ( PackageConstraint
+              (ScopeAnySetupQualifier cabalPkgname)
+              (PackagePropertyVersion $ orLaterVersion $ setupMinCabalVersion compiler)
+          )
+          ConstraintSetupCabalMinVersion
+      ]
+
+    tell
+      [ LabeledPackageConstraint
+          ( PackageConstraint
+              (ScopeAnySetupQualifier cabalPkgname)
+              (PackagePropertyVersion $ earlierVersion setupMaxCabalVersion)
+          )
+          ConstraintSetupCabalMaxVersion
+      ]
+
+    -- version constraints from the config file or command line
+    for_ ssConstraints $ \(pc, src) ->
+      tell [LabeledPackageConstraint (userToPackageConstraint pc) src]
+
+    -- enable stanza constraints where the user asked to enable
+    for_ localPackages $ \pkg -> do
+      let pkgname = pkgSpecifierTarget pkg
+          stanzaM = Map.findWithDefault Map.empty pkgname pkgStanzasEnabled
+          stanzas = [stanza | stanza <- [minBound .. maxBound], Map.lookup stanza stanzaM == Just True]
+      unless (null stanzas) $
+        tell
+          [ LabeledPackageConstraint
+              ( PackageConstraint
+                  (scopeToplevel pkgname)
+                  (PackagePropertyStanzas stanzas)
+              )
+              ConstraintSourceConfigFlagOrTarget
+          ]
+
+    -- TODO: [nice to have] should have checked at some point that the package in question actually has these flags.
+    for_ (Map.toList ssFlagAssignments) $ \(pkgname, flags) ->
+      tell
+        [ LabeledPackageConstraint
+            ( PackageConstraint
+                (scopeToplevel pkgname)
+                (PackagePropertyFlags flags)
+            )
+            ConstraintSourceConfigFlagOrTarget
+        ]
+
+    -- TODO: [nice to have] we have user-supplied flags for unspecified local packages (as well as specific per-package flags). For the former we just apply all these flags to all local targets which is silly. We should check if the flags are appropriate.
+    for_ localPackages $ \pkg -> do
+      let flags = ssFlagAssignment
+      unless (PD.nullFlagAssignment flags) $ do
+        let pkgname = pkgSpecifierTarget pkg
+        tell
+          [ LabeledPackageConstraint
+              ( PackageConstraint
+                  (scopeToplevel pkgname)
+                  (PackagePropertyFlags flags)
+              )
+              ConstraintSourceConfigFlagOrTarget
+          ]
+
+    tell (foldMap pkgSpecifierConstraints localPackages)
+
+mkPreferences ::
+  Package pkg =>
+  -- | localPackages
+  [PackageSpecifier pkg] ->
+  -- | pkgStanzasEnabled
+  Map.Map PackageName (Map.Map OptionalStanza Bool) ->
+  -- | sourcePkgPrefs
+  Map.Map PackageName VersionRange ->
+  -- | ssPreferences
+  [PackageVersionConstraint] ->
+  -- | result
+  [PackagePreference]
+mkPreferences localPackages pkgStanzasEnabled sourcePkgPrefs ssPreferences =
+  -- preferences from the config file or command line
+  [PackageVersionPreference name ver | PackageVersionConstraint name ver <- ssPreferences]
+    ++
+    -- enable stanza preference unilaterally, regardless if the user asked
+    -- accordingly or expressed no preference, to help hint the solver
+
+    -- enable stanza preference unilaterally, regardless if the user asked
+    -- accordingly or expressed no preference, to help hint the solver
+    [ PackageStanzasPreference pkgname stanzas
+      | pkg <- localPackages,
+        let pkgname = pkgSpecifierTarget pkg
+            stanzaM = Map.findWithDefault Map.empty pkgname pkgStanzasEnabled
+            stanzas =
+              [ stanza | stanza <- [minBound .. maxBound], Map.lookup stanza stanzaM /= Just False
+              ],
+        not (null stanzas)
+    ]
+    ++ [ PackageVersionPreference name ver
+         | (name, ver) <- Map.toList sourcePkgPrefs
+       ]
 
 -- | Give an interpretation to the global 'PackagesPreference' as
 --  specific per-package 'PackageVersionPreference'.
@@ -353,6 +405,8 @@ interpretPackagesPreference selected defaultPref prefs =
     versionPref :: PackageName -> [VersionRange]
     versionPref pkgname =
       fromMaybe [anyVersion] (Map.lookup pkgname versionPrefs)
+
+    versionPrefs :: Map.Map PackageName [VersionRange]
     versionPrefs =
       Map.fromListWith
         (++)
@@ -363,11 +417,15 @@ interpretPackagesPreference selected defaultPref prefs =
     installPref :: PackageName -> InstalledPreference
     installPref pkgname =
       fromMaybe (installPrefDefault pkgname) (Map.lookup pkgname installPrefs)
+
+    installPrefs :: Map.Map PackageName InstalledPreference
     installPrefs =
       Map.fromList
         [ (pkgname, pref)
           | PackageInstalledPreference pkgname pref <- prefs
         ]
+
+    installPrefDefault :: PackageName -> InstalledPreference
     installPrefDefault = case defaultPref of
       PreferAllLatest -> const Preference.PreferLatest
       PreferAllOldest -> const Preference.PreferOldest
@@ -382,33 +440,14 @@ interpretPackagesPreference selected defaultPref prefs =
     stanzasPref :: PackageName -> [OptionalStanza]
     stanzasPref pkgname =
       fromMaybe [] (Map.lookup pkgname stanzasPrefs)
+
+    stanzasPrefs :: Map.Map PackageName [OptionalStanza]
     stanzasPrefs =
       Map.fromListWith
         (\a b -> nub (a ++ b))
         [ (pkgname, pref)
           | PackageStanzasPreference pkgname pref <- prefs
         ]
-
-applyDefaultSetupDeps :: Compiler -> Platform -> UnresolvedSourcePackage -> UnresolvedSourcePackage
-applyDefaultSetupDeps comp platform srcpkg =
-  over
-    (srcpkgDescription . packageDescription . setupBuildInfo)
-    ( \case
-        Just sbi ->
-          Just sbi
-        Nothing ->
-          case defaultSetupDeps comp platform (srcpkg ^. srcpkgDescription . packageDescription) of
-            Nothing ->
-              Nothing
-            Just deps
-              | isCustom -> Just PD.SetupBuildInfo {PD.defaultSetupDepends = True, PD.setupDepends = deps}
-              | otherwise -> Nothing
-    )
-    srcpkg
-  where
-    isCustom = PD.buildType pkgdesc == PD.Custom
-    gpkgdesc = view srcpkgDescription srcpkg
-    pkgdesc = view packageDescription gpkgdesc
 
 -- | Append the given package databases to an existing PackageDBStack.
 -- A @Nothing@ entry will clear everything before it.
@@ -507,16 +546,19 @@ localPackagesEnabledStanzas projectConfig localPackages =
         -- and packages explicitly mentioned in the project
         --
         let pkgname = pkgSpecifierTarget pkg
+
             testsEnabled =
               lookupLocalPackageConfig
                 packageConfigTests
                 projectConfig
                 pkgname
+
             benchmarksEnabled =
               lookupLocalPackageConfig
                 packageConfigBenchmarks
                 projectConfig
                 pkgname
+
             stanzas
               | shouldReallyBeLocal pkg =
                   Map.fromList $
@@ -529,175 +571,3 @@ localPackagesEnabledStanzas projectConfig localPackages =
 shouldReallyBeLocal :: PackageSpecifier (SourcePackage (PackageLocation loc)) -> Bool
 shouldReallyBeLocal (SpecificSourcePackage (SourcePackage {SP.srcpkgSource = LocalUnpackedPackage {}})) = True
 shouldReallyBeLocal _otherwise = False
-
---
--- Again not exported
---
-
--- | Part of our Setup.hs handling policy is implemented by getting the solver
--- to work out setup dependencies for packages. The solver already handles
--- packages that explicitly specify setup dependencies, but we can also tell
--- the solver to treat other packages as if they had setup dependencies.
--- That's what this function does, it gets called by the solver for all
--- packages that don't already have setup dependencies.
---
--- The dependencies we want to add is different for each 'SetupScriptStyle'.
---
--- Note that adding default deps means these deps are actually /added/ to the
--- packages that we get out of the solver in the 'SolverInstallPlan'. Making
--- implicit setup deps explicit is a problem in the post-solver stages because
--- we still need to distinguish the case of explicit and implicit setup deps.
--- See 'rememberImplicitSetupDeps'.
---
--- Note in addition to adding default setup deps, we also use
--- 'addSetupCabalMinVersionConstraint' (in 'planPackages') to require
--- @Cabal >= 1.20@ for Setup scripts.
-defaultSetupDeps ::
-  Compiler ->
-  Platform ->
-  PD.PackageDescription ->
-  Maybe [Dependency]
-defaultSetupDeps compiler platform pkg =
-  case packageSetupScriptStyle pkg of
-    -- For packages with build type custom that do not specify explicit
-    -- setup dependencies, we add a dependency on Cabal and a number
-    -- of other packages.
-    SetupCustomImplicitDeps ->
-      Just $
-        [ Dependency depPkgname anyVersion mainLibSet
-          | depPkgname <- legacyCustomSetupPkgs compiler platform
-        ]
-          ++ [ Dependency cabalPkgname cabalConstraint mainLibSet
-               | packageName pkg /= cabalPkgname
-             ]
-      where
-        -- The Cabal dep is slightly special:
-        -- \* We omit the dep for the Cabal lib itself, since it bootstraps.
-        -- \* We constrain it to be < 1.25
-        --
-        -- Note: we also add a global constraint to require Cabal >= 1.20
-        -- for Setup scripts (see use addSetupCabalMinVersionConstraint).
-        --
-        cabalConstraint =
-          orLaterVersion (csvToVersion (PD.specVersion pkg))
-            `intersectVersionRanges` earlierVersion cabalCompatMaxVer
-        -- The idea here is that at some point we will make significant
-        -- breaking changes to the Cabal API that Setup.hs scripts use.
-        -- So for old custom Setup scripts that do not specify explicit
-        -- constraints, we constrain them to use a compatible Cabal version.
-        cabalCompatMaxVer = mkVersion [1, 25]
-
-    -- For other build types (like Simple) if we still need to compile an
-    -- external Setup.hs, it'll be one of the simple ones that only depends
-    -- on Cabal and base.
-    SetupNonCustomExternalLib ->
-      Just
-        [ Dependency cabalPkgname cabalConstraint mainLibSet,
-          Dependency basePkgname anyVersion mainLibSet
-        ]
-      where
-        cabalConstraint = orLaterVersion (csvToVersion (PD.specVersion pkg))
-
-    -- The internal setup wrapper method has no deps at all.
-    SetupNonCustomInternalLib -> Just []
-    -- This case gets ruled out by the caller, planPackages, see the note
-    -- above in the SetupCustomImplicitDeps case.
-    SetupCustomExplicitDeps ->
-      error $
-        "defaultSetupDeps: called for a package with explicit "
-          ++ "setup deps: "
-          ++ Cabal.prettyShow (packageId pkg)
-  where
-    -- we require one less
-    --
-    -- This maps e.g. CabalSpecV3_0 to mkVersion [2,5]
-    csvToVersion :: CabalSpecVersion -> Version
-    csvToVersion = mkVersion . cabalSpecMinimumLibraryVersion
-
----------------------------
--- Setup.hs script policy
---
-
--- Handling for Setup.hs scripts is a bit tricky, part of it lives in the
--- solver phase, and part in the elaboration phase. We keep the helper
--- functions for both phases together here so at least you can see all of it
--- in one place.
---
--- There are four major cases for Setup.hs handling:
---
---  1. @build-type@ Custom with a @custom-setup@ section
---  2. @build-type@ Custom without a @custom-setup@ section
---  3. @build-type@ not Custom with @cabal-version >  $our-cabal-version@
---  4. @build-type@ not Custom with @cabal-version <= $our-cabal-version@
---
--- It's also worth noting that packages specifying @cabal-version: >= 1.23@
--- or later that have @build-type@ Custom will always have a @custom-setup@
--- section. Therefore in case 2, the specified @cabal-version@ will always be
--- less than 1.23.
---
--- In cases 1 and 2 we obviously have to build an external Setup.hs script,
--- while in case 4 we can use the internal library API.
---
--- TODO:In case 3 we should fail. We don't know how to talk to
--- newer ./Setup.hs
---
--- data SetupScriptStyle = ...  -- see ProjectPlanning.Types
-
--- | Work out the 'SetupScriptStyle' given the package description.
-packageSetupScriptStyle :: PD.PackageDescription -> SetupScriptStyle
-packageSetupScriptStyle pkg
-  | buildType == PD.Custom,
-    Just setupbi <- PD.setupBuildInfo pkg, -- does have a custom-setup stanza
-    not (PD.defaultSetupDepends setupbi) -- but not one we added internally
-    =
-      SetupCustomExplicitDeps
-  | buildType == PD.Custom,
-    Just setupbi <- PD.setupBuildInfo pkg, -- we get this case post-solver as
-    PD.defaultSetupDepends setupbi -- the solver fills in the deps
-    =
-      SetupCustomImplicitDeps
-  | buildType == PD.Custom,
-    Nothing <- PD.setupBuildInfo pkg -- we get this case pre-solver
-    =
-      SetupCustomImplicitDeps
-  -- here we should fail.
-  | PD.specVersion pkg > cabalSpecLatest -- one cabal-install is built against
-    =
-      SetupNonCustomExternalLib
-  | otherwise =
-      SetupNonCustomInternalLib
-  where
-    buildType = PD.buildType pkg
-
-legacyCustomSetupPkgs :: Compiler -> Platform -> [PackageName]
-legacyCustomSetupPkgs compiler (Platform _ os) =
-  map mkPackageName $
-    [ "array",
-      "base",
-      "binary",
-      "bytestring",
-      "containers",
-      "deepseq",
-      "directory",
-      "filepath",
-      "pretty",
-      "process",
-      "time",
-      "transformers"
-    ]
-      ++ ["Win32" | os == Windows]
-      ++ ["unix" | os /= Windows]
-      ++ ["ghc-prim" | isGHC]
-      ++ ["template-haskell" | isGHC]
-      ++ ["old-time" | notGHC710]
-  where
-    isGHC = compilerCompatFlavor GHC compiler
-    notGHC710 = case compilerCompatVersion GHC compiler of
-      Nothing -> False
-      Just v -> v <= mkVersion [7, 9]
-
-basePkgname :: PD.PackageName
-basePkgname = mkPackageName "base"
-
-cabalPkgname :: PD.PackageName
-cabalPkgname = mkPackageName "cabal"

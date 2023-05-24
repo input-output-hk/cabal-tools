@@ -108,7 +108,7 @@ instance Pretty qpn => Pretty (Dep qpn) where
 instance Pretty CI where
   pretty (Fixed i) = "fixed" <+> fromString (showI i)
   pretty (Constrained vr) | isAnyVersion vr = ""
-  pretty (Constrained vr) | otherwise = fromString (Cabal.prettyShow vr)
+  pretty (Constrained vr) = fromString (Cabal.prettyShow vr)
 
 instance Pretty ExposedComponent where
   pretty (ExposedLib libName) = pretty $ PD.CLibName libName

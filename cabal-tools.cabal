@@ -9,6 +9,8 @@ extra-doc-files: CHANGELOG.md
 
 common warnings
   ghc-options: -Wall
+  default-language: Haskell2010
+  default-extensions: ImportQualifiedPost
 
 library utils
   import:           warnings
@@ -22,6 +24,7 @@ library utils
     Dependency
     FlaggedDep
     RecursiveFlaggedDep
+    SetupDeps
     SolverIndex
 
   build-depends:
@@ -43,8 +46,6 @@ library utils
     , these
 
   hs-source-dirs:   src
-  default-language: Haskell2010
-  default-extensions: ImportQualifiedPost
 
 executable cabal-show-project-config
   import:           warnings
@@ -62,7 +63,6 @@ executable cabal-show-project-config
     , optparse-applicative
 
   hs-source-dirs:   app
-  default-language: Haskell2010
 
 executable cabal-available-packages
   import:           warnings
@@ -81,7 +81,6 @@ executable cabal-available-packages
     , text
 
   hs-source-dirs:   app
-  default-language: Haskell2010
 
 executable cabal-solver
   import:           warnings
@@ -108,7 +107,6 @@ executable cabal-solver
     , these
 
   hs-source-dirs:   app
-  default-language: Haskell2010
 
 executable cabal-show-install-plan
   import:           warnings
@@ -127,7 +125,6 @@ executable cabal-show-install-plan
     , optparse-applicative
 
   hs-source-dirs:   app
-  default-language: Haskell2010
 
 executable cabal-show-solver-plan
   import:           warnings
@@ -146,7 +143,6 @@ executable cabal-show-solver-plan
     , optparse-applicative
 
   hs-source-dirs:   app
-  default-language: Haskell2010
 
 executable cabal-write-plan-json
   import:           warnings
@@ -165,7 +161,6 @@ executable cabal-write-plan-json
     , optparse-applicative
 
   hs-source-dirs:   app
-  default-language: Haskell2010
 
 executable cabal-active-bounds
   import:           warnings
@@ -183,4 +178,3 @@ executable cabal-active-bounds
     , filepath
 
   hs-source-dirs:   app
-  default-language: Haskell2010
