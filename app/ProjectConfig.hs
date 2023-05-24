@@ -6,7 +6,7 @@ import Distribution.Client.DistDirLayout (DistDirLayout (distProjectCacheFile))
 import Distribution.Client.ProjectConfig (ProjectConfig)
 import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
 import Opts (parseOpts)
-import PrettyPrint (pPrint)
+import PrettyPrintSimple (pPrint)
 import WithCacheFile (withCacheFile)
 
 type Key = (FilePath, FilePath)

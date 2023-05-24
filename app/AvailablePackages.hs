@@ -14,7 +14,7 @@ import Distribution.Pretty (prettyShow)
 import Distribution.Solver.Types.PackageIndex
 import Distribution.Verbosity
 import Opts (parseOpts)
-import PrettyPrint (pPrint)
+import PrettyPrintSimple (pPrint)
 import System.Environment (getArgs)
 
 main :: IO ()

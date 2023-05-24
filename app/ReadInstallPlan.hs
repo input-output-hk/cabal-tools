@@ -10,7 +10,7 @@ import Distribution.Client.ProjectConfig (ProjectConfig)
 import Distribution.Client.ProjectPlanning (ElaboratedInstallPlan, ElaboratedSharedConfig)
 import Distribution.Client.Types (PackageSpecifier, UnresolvedSourcePackage)
 import Opts (parseOpts)
-import PrettyPrint (pPrint)
+import PrettyPrintSimple (pPrint)
 import WithCacheFile (withCacheFile)
 
 type Key = (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])

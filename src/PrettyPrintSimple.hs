@@ -1,4 +1,4 @@
-module PrettyPrint where
+module PrettyPrintSimple where
 
 import Data.Text.Lazy
 import Text.Pretty.Simple

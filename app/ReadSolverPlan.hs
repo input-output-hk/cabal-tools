@@ -18,7 +18,7 @@ import Distribution.Solver.Types.PkgConfigDb (PkgConfigDb)
 import Distribution.Solver.Types.SourcePackage (SourcePackage (srcpkgPackageId))
 import Distribution.System (Platform)
 import Opts (parseOpts)
-import PrettyPrint (pPrint)
+import PrettyPrintSimple (pPrint)
 import WithCacheFile (withCacheFile)
 
 type Key = (SolverSettings, [PackageSpecifier UnresolvedSourcePackage], Map PackageName (Map OptionalStanza Bool), Compiler, Platform, [ConfiguredProgram])
@@ -39,28 +39,28 @@ main = do
       let (solverPlan, _pkgConfigDB, totalIndexState, activeRepos) = v
 
       putStrLn "-------------------- solverSettings --------------------"
-      PrettyPrint.pPrint solverSettings
+      pPrint solverSettings
 
       putStrLn "-------------------- localPackages --------------------"
-      for_ localPackages $ PrettyPrint.pPrint . fmap srcpkgPackageId
+      for_ localPackages $ pPrint . fmap srcpkgPackageId
 
       putStrLn "-------------------- localPackagesEnabledStanzas --------------------"
-      PrettyPrint.pPrint localPackagesEnabledStanzas
+      pPrint localPackagesEnabledStanzas
 
       putStrLn "-------------------- compiler --------------------"
-      PrettyPrint.pPrint compiler
+      pPrint compiler
 
       putStrLn "-------------------- platform --------------------"
-      PrettyPrint.pPrint platform
+      pPrint platform
 
       putStrLn "-------------------- configuredPrograms --------------------"
-      PrettyPrint.pPrint configuredPrograms
+      pPrint configuredPrograms
 
       putStrLn "-------------------- solverPlan --------------------"
       putStrLn $ SIP.showInstallPlan solverPlan
 
       putStrLn "-------------------- totalIndexState --------------------"
-      PrettyPrint.pPrint totalIndexState
+      pPrint totalIndexState
 
       putStrLn "-------------------- activeRepos --------------------"
-      PrettyPrint.pPrint activeRepos
+      pPrint activeRepos
