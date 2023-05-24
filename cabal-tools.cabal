@@ -23,7 +23,6 @@ library utils
     ComponentFlaggedDep
     Dependency
     FlaggedDep
-    RecursiveFlaggedDep
     SetupDeps
     SolverIndex
 

@@ -1,9 +1,15 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
 module FlaggedDep where
 
+import Data.Coerce
+import Data.Functor.Foldable
 import Data.String
 import Distribution.Compat.Lens
 import Distribution.PackageDescription qualified as PD
@@ -16,7 +22,24 @@ import Distribution.Solver.Types.ComponentDeps
 import Distribution.Solver.Types.OptionalStanza
 import Distribution.Types.ComponentName
 import Distribution.Types.VersionRange
+import GHC.Generics
 import Prettyprinter
+
+type instance Base (FlaggedDep qpn) = FlaggedDepF qpn
+
+data FlaggedDepF qpn f
+  = FlaggedF (FN qpn) FInfo [f] [f]
+  | SimpleF (LDep qpn) Component
+  | StanzaF (SN qpn) [f]
+  deriving (Functor, Generic)
+
+instance Recursive (FlaggedDep qpn) where
+  project (Flagged fn fInfo trueDeps falseDeps) =
+    FlaggedF fn fInfo (coerce trueDeps) (coerce falseDeps)
+  project (Simple lDep comp) =
+    SimpleF lDep comp
+  project (Stanza sn trueDeps) =
+    StanzaF sn (coerce trueDeps)
 
 flaggedDepQPN :: Traversal (FlaggedDep a) (FlaggedDep b) a b
 flaggedDepQPN f (Simple lDep component) =
@@ -51,6 +74,16 @@ fnQPN f (FN qpn flag) = FN <$> f qpn <*> pure flag
 
 snQPN :: Traversal (SN a) (SN b) a b
 snQPN f (SN qpn stanza) = SN <$> f qpn <*> pure stanza
+
+--
+--
+--
+
+deriving instance Show qpn => Show (FlaggedDep qpn)
+
+deriving instance Show qpn => Show (Dep qpn)
+
+deriving instance Show qpn => Show (LDep qpn)
 
 --
 -- Pretty printing
