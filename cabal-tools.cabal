@@ -18,10 +18,10 @@ executable cabal-install-plan
                     , containers
                     , directory
                     , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
+                    , Cabal                ^>= 3.10.0.0
+                    , Cabal-syntax         ^>= 3.10.0.0
+                    , cabal-install        ^>= 3.10.0.0
+                    , cabal-install-solver ^>= 3.10.0.0
                     , hackage-security
                     , network-uri
                     , zlib
@@ -47,10 +47,10 @@ executable cabal-builder
     main-is:          Builder.hs
     build-depends:    base                  >= 4.14.3.0
                     , aeson
-                    , Cabal                ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
+                    , Cabal                ^>= 3.10.0.0
+                    , Cabal-syntax         ^>= 3.10.0.0
+                    , cabal-install        ^>= 3.10.0.0
+                    , cabal-install-solver ^>= 3.10.0.0
                     , containers
                     , directory
                     , optparse-applicative
@@ -82,10 +82,10 @@ executable cabal-gen-bounds
     build-depends:    base                  >= 4.14.3.0
                     , containers
                     , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
+                    , Cabal                ^>= 3.10.0.0
+                    , cabal-install        ^>= 3.10.0.0
+                    , cabal-install-solver ^>= 3.10.0.0
+                    , Cabal-syntax         ^>= 3.10.0.0
     hs-source-dirs:   app
     default-language: Haskell2010
 
@@ -97,10 +97,14 @@ executable cabal-read-plan
                     , bytestring
                     , containers
                     , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
+                    , Cabal                ^>= 3.10.0.0
+                    , cabal-install        ^>= 3.10.0.0
+                    , cabal-install-solver ^>= 3.10.0.0
+                    , Cabal-syntax         ^>= 3.10.0.0
+                    , aeson
+                    , invariant
+                    , text
+                    , unjson
     hs-source-dirs:   app
     default-language: Haskell2010
 
@@ -112,10 +116,10 @@ executable cabal-active-bounds
                     , bytestring
                     , containers
                     , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
+                    , Cabal                ^>= 3.10.0.0
+                    , cabal-install        ^>= 3.10.0.0
+                    , cabal-install-solver ^>= 3.10.0.0
+                    , Cabal-syntax         ^>= 3.10.0.0
     hs-source-dirs:   app
     default-language: Haskell2010
 
@@ -128,9 +132,9 @@ executable cabal-project-building
                     , containers
                     , directory
                     , filepath
-                    , Cabal                ^>= 3.8.0.0
-                    , cabal-install        ^>= 3.8.0.0
-                    , cabal-install-solver ^>= 3.8.0.0
-                    , Cabal-syntax         ^>= 3.8.0.0
+                    , Cabal                ^>= 3.10.0.0
+                    , cabal-install        ^>= 3.10.0.0
+                    , cabal-install-solver ^>= 3.10.0.0
+                    , Cabal-syntax         ^>= 3.10.0.0
     hs-source-dirs:   app
     default-language: Haskell2010
