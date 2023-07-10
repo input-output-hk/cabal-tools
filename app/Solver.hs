@@ -1,12 +1,17 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# HLINT ignore "Redundant $" #-}
+{-# LANGUAGE LambdaCase #-}
 {-# HLINT ignore "Use <$>" #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
-{-# HLINT ignore "Redundant $" #-}
 
 import Control.Monad (unless, when)
 import Control.Monad.Writer.CPS (MonadWriter (..), execWriter)
+import Data.Aeson (ToJSON)
+import Data.Aeson qualified as Aeson
+import Data.ByteString.Lazy.Char8 qualified as LC8
 import Data.Foldable
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
@@ -38,9 +43,10 @@ import Distribution.Simple.PackageIndex qualified as Cabal.PackageIndex
 import Distribution.Simple.Program (defaultProgramDb)
 import Distribution.Simple.Utils (cabalVersion)
 import Distribution.Solver.Modular (PruneAfterFirstSuccess (..), SolverConfig (..))
-import Distribution.Solver.Modular.Assignment (Assignment, toCPs)
+import Distribution.Solver.Modular.Assignment (Assignment (A), toCPs)
 import Distribution.Solver.Modular.ConfiguredConversion (convCP)
 import Distribution.Solver.Modular.Dependency
+import Distribution.Solver.Modular.Flag (FN (FN), SN (SN), showQFN)
 import Distribution.Solver.Modular.Index qualified as Solver
 import Distribution.Solver.Modular.IndexConversion
 import Distribution.Solver.Modular.Log
@@ -48,27 +54,35 @@ import Distribution.Solver.Modular.Message (Message, showMessages)
 import Distribution.Solver.Modular.Package
 import Distribution.Solver.Modular.RetryLog (toProgress)
 import Distribution.Solver.Modular.Solver (solve)
+import Distribution.Solver.Types.ComponentDeps (ComponentDeps)
 import Distribution.Solver.Types.ConstraintSource (ConstraintSource (..))
+import Distribution.Solver.Types.InstSolverPackage (InstSolverPackage (instSolverPkgExeDeps, instSolverPkgIPI, instSolverPkgLibDeps))
 import Distribution.Solver.Types.InstalledPreference (InstalledPreference)
 import Distribution.Solver.Types.InstalledPreference qualified as Preference
 import Distribution.Solver.Types.LabeledPackageConstraint
-import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..))
+import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..), OptionalStanzaSet, optStanzaSetSingleton)
 import Distribution.Solver.Types.PackageConstraint (ConstraintScope (ScopeAnySetupQualifier), scopeToPackageName)
 import Distribution.Solver.Types.PackageIndex qualified as Solver.PackageIndex
+import Distribution.Solver.Types.PackagePath (QPN, showQPN)
 import Distribution.Solver.Types.PackagePreferences (PackagePreferences (..))
 import Distribution.Solver.Types.PkgConfigDb (readPkgConfigDb)
+import Distribution.Solver.Types.ResolverPackage (ResolverPackage (Configured, PreExisting))
 import Distribution.Solver.Types.Settings (AvoidReinstalls (..), EnableBackjumping (..), ShadowPkgs (..), SolveExecutables (SolveExecutables), StrongFlags (StrongFlags))
-import Distribution.Solver.Types.SourcePackage (SourcePackage (SourcePackage))
+import Distribution.Solver.Types.SolverPackage (SolverPackage (..))
+import Distribution.Solver.Types.SourcePackage (SourcePackage (..))
 import Distribution.Solver.Types.SourcePackage qualified as SP
 import Distribution.System (Platform (..), buildArch, buildOS)
+import Distribution.Types.Flag (FlagAssignment, mkFlagAssignment)
 import Distribution.Types.PackageVersionConstraint
 import Distribution.Utils.Generic (ordNubBy)
 import Distribution.Verbosity as Verbosity
 import Distribution.Version
+import GHC.Generics (Generically)
 import Opts (parseOpts)
 import PrettyPrintSimple (pPrint)
 import SetupDeps (applyDefaultSetupDeps, cabalPkgname)
 import SolverIndex (prettySolverFailure, printSolverIndex)
+import Prelude hiding (pi)
 
 main :: IO ()
 main = do
@@ -107,7 +121,7 @@ main = do
           installedPkgIndex
           [packageId pkg | SpecificSourcePackage pkg <- localPackages]
 
-  when True $ do
+  when False $ do
     putStrLn "------------------------------------"
     putStrLn "----- installed packages index -----"
     putStrLn "------------------------------------"
@@ -234,7 +248,7 @@ main = do
           installedPackages
           sourcePackages
 
-  printSolverIndex idx
+  -- printSolverIndex idx
 
   let solverConfig =
         SolverConfig
@@ -265,10 +279,18 @@ main = do
   foldProgress
     (\step rest -> putStrLn step >> rest)
     (putStrLn . prettySolverFailure)
-    ( \(a, rdm) -> do
-        pPrint a
-        pPrint rdm
-        pPrint $ ordNubBy nodeKey $ map (convCP installedPackages sourcePackages) (toCPs a rdm)
+    ( \(assignment, rdm) -> do
+        let resolverPkgs = ordNubBy nodeKey $ map (convCP installedPackages sourcePackages) (toCPs assignment rdm)
+        for_ resolverPkgs $
+          \case
+            PreExisting ip -> do
+              LC8.putStrLn $ Aeson.encode (sourcePackageId $ instSolverPkgIPI ip, instSolverPkgLibDeps ip, instSolverPkgExeDeps ip)
+            Configured sp -> do
+              pPrint (srcpkgPackageId $ solverPkgSource sp)
+              pPrint (solverPkgFlags sp)
+              pPrint (solverPkgStanzas sp)
+              pPrint (solverPkgLibDeps sp)
+              pPrint (solverPkgExeDeps sp)
     )
     $ showMessages progress
 
@@ -370,9 +392,6 @@ mkPreferences localPackages pkgStanzasEnabled sourcePkgPrefs ssPreferences =
   -- preferences from the config file or command line
   [PackageVersionPreference name ver | PackageVersionConstraint name ver <- ssPreferences]
     ++
-    -- enable stanza preference unilaterally, regardless if the user asked
-    -- accordingly or expressed no preference, to help hint the solver
-
     -- enable stanza preference unilaterally, regardless if the user asked
     -- accordingly or expressed no preference, to help hint the solver
     [ PackageStanzasPreference pkgname stanzas
@@ -569,5 +588,7 @@ localPackagesEnabledStanzas projectConfig localPackages =
     ]
 
 shouldReallyBeLocal :: PackageSpecifier (SourcePackage (PackageLocation loc)) -> Bool
-shouldReallyBeLocal (SpecificSourcePackage (SourcePackage {SP.srcpkgSource = LocalUnpackedPackage {}})) = True
+shouldReallyBeLocal (SpecificSourcePackage (SP.SourcePackage {SP.srcpkgSource = LocalUnpackedPackage {}})) = True
 shouldReallyBeLocal _otherwise = False
+
+deriving instance ToJSON (ComponentDeps a) via Generically (ComponentDeps a)
