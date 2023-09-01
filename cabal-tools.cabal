@@ -20,10 +20,10 @@ library utils
     , base                  ^>=4.16
     , binary
     , bytestring
-    , Cabal
-    , cabal-install
-    , cabal-install-solver
-    , Cabal-syntax
+    , Cabal                  ==3.10.1.0
+    , cabal-install          ==3.10.1.0
+    , cabal-install-solver   ==3.10.1.0
+    , Cabal-syntax           ==3.10.1.0
     , optparse-applicative
 
   hs-source-dirs:   src
@@ -75,10 +75,10 @@ executable cabal-show-install-plan
     , base                  ^>=4.16
     , binary
     , bytestring
-    , Cabal                 >=3.8
-    , cabal-install         >=3.8
-    , cabal-install-solver  >=3.8
-    , Cabal-syntax          >=3.8
+    , Cabal                 
+    , cabal-install         
+    , cabal-install-solver  
+    , Cabal-syntax          
     , cabal-tools:utils
     , containers
     , filepath
@@ -95,10 +95,10 @@ executable cabal-show-solver-plan
     , base                  ^>=4.16
     , binary
     , bytestring
-    , Cabal                 >=3.8
-    , cabal-install         >=3.8
-    , cabal-install-solver  >=3.8
-    , Cabal-syntax          >=3.8
+    , Cabal                 
+    , cabal-install         
+    , cabal-install-solver  
+    , Cabal-syntax          
     , cabal-tools:utils
     , containers
     , filepath
@@ -115,10 +115,10 @@ executable cabal-write-plan-json
     , base                  ^>=4.16
     , binary
     , bytestring
-    , Cabal                 >=3.8
-    , cabal-install         >=3.8
-    , cabal-install-solver  >=3.8
-    , Cabal-syntax          >=3.8
+    , Cabal                 
+    , cabal-install         
+    , cabal-install-solver  
+    , Cabal-syntax          
     , cabal-tools:utils
     , containers
     , filepath
@@ -135,10 +135,10 @@ executable cabal-active-bounds
     , base                  ^>=4.16
     , binary
     , bytestring
-    , Cabal                 >=3.8
-    , cabal-install         >=3.8
-    , cabal-install-solver  >=3.8
-    , Cabal-syntax          >=3.8
+    , Cabal                 
+    , cabal-install         
+    , cabal-install-solver  
+    , Cabal-syntax          
     , cabal-tools:utils
     , containers
     , filepath
