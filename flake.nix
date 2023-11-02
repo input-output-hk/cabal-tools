@@ -1,52 +1,39 @@
 {
-  # This is a template created by `hix init`
-  inputs.haskellNix.url = "github:input-output-hk/haskell.nix";
-  inputs.nixpkgs.follows = "haskellNix/nixpkgs-unstable";
-  inputs.flake-utils.url = "github:numtide/flake-utils";
-  outputs = { self, nixpkgs, flake-utils, haskellNix }:
-    let
-      supportedSystems = [
-        "x86_64-linux"
-        "x86_64-darwin"
-        "aarch64-linux"
-        "aarch64-darwin"
-      ];
-    in
-    flake-utils.lib.eachSystem supportedSystems (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          inherit (haskellNix) config;
-          overlays = [ haskellNix.overlay ];
-        };
-        project = pkgs.haskell-nix.cabalProject' {
-          src = ./.;
+  inputs = {
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    haskell-nix.url = "github:input-output-hk/haskell.nix";
+  };
+  outputs = inputs@{ flake-parts, haskell-nix, ... }:
+    flake-parts.lib.mkFlake
+      { inherit inputs; }
+      {
+        systems = [ "x86_64-linux" ];
+        perSystem = { self', system, pkgs, ... }:
+          let
+            project = pkgs.haskell-nix.cabalProject' {
+              name = "cabal-tools";
+              compiler-nix-name = "ghc96";
 
-          name = "cabal-tools";
-          compiler-nix-name = "ghc927";
-          configureArgs = "-v3";
+              src = ./.;
 
-          # We absolutely need cabal 3.10.1.0
-          cabal-install = pkgs.cabal-install; # version 3.10.1.0
+              crossPlatforms = p:
+                pkgs.lib.optionals
+                  (pkgs.stdenv.system == "x86_64-linux")
+                  [ p.mingwW64 p.musl64 ];
 
-          crossPlatforms = p:
-            pkgs.lib.optionals (pkgs.stdenv.system == "x86_64-linux")
-              [ p.mingwW64 p.musl64 ];
-
-          shell.tools.cabal = "latest";
-          shell.tools.hlint = "latest";
-          shell.tools.haskell-language-server = "latest";
-        };
-        flake = project.flake {
-          variants = {
-            "3.8.1.0" = { cabalProjectLocal = "constraints: cabal-install ==3.8.1.0"; };
-            "3.10.1.0" = { cabalProjectLocal = "constraints: cabal-install ==3.10.1.0"; };
+              shell.tools = {
+                cabal = "latest";
+                cabal-plan = "latest";
+                fourmolu = "0.14.0.0";
+              };
+            };
+            flake = project.flake { };
+          in
+          {
+            _module.args.pkgs = haskell-nix.legacyPackages.${system};
+            inherit (flake) apps checks devShells packages;
           };
-        };
-      in
-      flake // {
-        inherit project;
-      });
+      };
 
   # --- Flake Local Nix Configuration ----------------------------
   nixConfig = {

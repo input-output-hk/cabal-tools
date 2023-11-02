@@ -17,7 +17,7 @@ library utils
     WithCacheFile
 
   build-depends:
-    , base                  ^>=4.16
+    , base                  ^>=4.16 || ^>=4.17 || ^>= 4.18
     , binary
     , bytestring
     , Cabal                  ==3.10.1.0
@@ -34,7 +34,7 @@ executable cabal-show-project-config
   main-is:          ProjectConfig.hs
   build-depends:
     , aeson
-    , base                  ^>=4.16
+    , base
     , binary
     , bytestring
     , Cabal
@@ -53,7 +53,7 @@ executable cabal-available-packages
   main-is:          AvailablePackages.hs
   build-depends:
     , aeson
-    , base                  ^>=4.16
+    , base
     , binary
     , bytestring
     , Cabal
@@ -72,13 +72,13 @@ executable cabal-show-install-plan
   import:           warnings
   main-is:          ReadInstallPlan.hs
   build-depends:
-    , base                  ^>=4.16
+    , base
     , binary
     , bytestring
-    , Cabal                 
-    , cabal-install         
-    , cabal-install-solver  
-    , Cabal-syntax          
+    , Cabal
+    , cabal-install
+    , cabal-install-solver
+    , Cabal-syntax
     , cabal-tools:utils
     , containers
     , filepath
@@ -92,13 +92,13 @@ executable cabal-show-solver-plan
   import:           warnings
   main-is:          ReadSolverPlan.hs
   build-depends:
-    , base                  ^>=4.16
+    , base
     , binary
     , bytestring
-    , Cabal                 
-    , cabal-install         
-    , cabal-install-solver  
-    , Cabal-syntax          
+    , Cabal
+    , cabal-install
+    , cabal-install-solver
+    , Cabal-syntax
     , cabal-tools:utils
     , containers
     , filepath
@@ -112,13 +112,13 @@ executable cabal-write-plan-json
   import:           warnings
   main-is:          WritePlanJson.hs
   build-depends:
-    , base                  ^>=4.16
+    , base
     , binary
     , bytestring
-    , Cabal                 
-    , cabal-install         
-    , cabal-install-solver  
-    , Cabal-syntax          
+    , Cabal
+    , cabal-install
+    , cabal-install-solver
+    , Cabal-syntax
     , cabal-tools:utils
     , containers
     , filepath
@@ -132,13 +132,13 @@ executable cabal-active-bounds
   import:           warnings
   main-is:          ActiveBounds.hs
   build-depends:
-    , base                  ^>=4.16
+    , base
     , binary
     , bytestring
-    , Cabal                 
-    , cabal-install         
-    , cabal-install-solver  
-    , Cabal-syntax          
+    , Cabal
+    , cabal-install
+    , cabal-install-solver
+    , Cabal-syntax
     , cabal-tools:utils
     , containers
     , filepath
