@@ -1,45 +1,50 @@
 {
-  # This is a template created by `hix init`
-  inputs.haskellNix.url = "github:input-output-hk/haskell.nix";
-  inputs.nixpkgs.follows = "haskellNix/nixpkgs-unstable";
-  inputs.flake-utils.url = "github:numtide/flake-utils";
-  outputs = { self, nixpkgs, flake-utils, haskellNix }:
-    let
-      supportedSystems =
-        [ "x86_64-linux" "x86_64-darwin" "aarch64-linux" "aarch64-darwin" ];
-    in flake-utils.lib.eachSystem supportedSystems (system:
-      let
-        overlays = [
-          haskellNix.overlay
-          (final: prev: {
-            hixProject = final.haskell-nix.hix.project {
+  inputs = {
+    flake-parts.url = "github:hercules-ci/flake-parts";
+    haskell-nix.url = "github:input-output-hk/haskell.nix";
+  };
+  outputs = inputs@{ flake-parts, haskell-nix, ... }:
+    flake-parts.lib.mkFlake
+      { inherit inputs; }
+      {
+        systems = [ "x86_64-linux" ];
+        perSystem = { self', system, pkgs, ... }:
+          let
+            project = pkgs.haskell-nix.cabalProject' {
+              name = "cabal-tools";
+              compiler-nix-name = "ghc96";
+
               src = ./.;
-              evalSystem = "x86_64-linux";
+
+              crossPlatforms = p:
+                pkgs.lib.optionals
+                  (pkgs.stdenv.system == "x86_64-linux")
+                  [ p.mingwW64 p.musl64 ];
+
+              shell.tools = {
+                cabal = "latest";
+                cabal-plan = "latest";
+                fourmolu = "0.14.0.0";
+              };
             };
-          })
-        ];
-        pkgs = import nixpkgs {
-          inherit system overlays;
-          inherit (haskellNix) config;
-        };
-        flake = pkgs.hixProject.flake { };
-      in flake // {
-        legacyPackages = pkgs;
-        package = flake.packages // {
-          "cabal-gen-bounds" =
-            flake.packages."cabal-tools:exe:cabal-gen-bounds";
-          "cabal-builder" = flake.packages."cabal-tools:exe:cabal-builder";
-        };
-      });
+            flake = project.flake { };
+          in
+          {
+            _module.args.pkgs = haskell-nix.legacyPackages.${system};
+            inherit (flake) apps checks devShells packages;
+          };
+      };
 
   # --- Flake Local Nix Configuration ----------------------------
   nixConfig = {
-    # This sets the flake to use the IOG nix cache.
-    # Nix should ask for permission before using it,
-    # but remove it here if you do not want it to.
-    extra-substituters = [ "https://cache.iog.io" ];
-    extra-trusted-public-keys =
-      [ "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=" ];
+    extra-substituters = [
+      "https://cache.iog.io"
+      "https://cache.zw3rk.com"
+    ];
+    extra-trusted-public-keys = [
+      "hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ="
+      "loony-tools:pr9m4BkM/5/eSTZlkQyRt57Jz7OMBxNSUiMC4FkcNfk="
+    ];
     allow-import-from-derivation = "true";
   };
 }
