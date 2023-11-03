@@ -97,6 +97,7 @@ executable cabal-read-plan
     import:           warnings
     main-is:          ReadPlan.hs
     build-depends:    base                  >= 4.14.3.0
+                    , base16-bytestring
                     , binary
                     , bytestring
                     , containers
@@ -105,11 +106,13 @@ executable cabal-read-plan
                     , cabal-install        ^>= 3.10.0.0
                     , cabal-install-solver ^>= 3.10.0.0
                     , Cabal-syntax         ^>= 3.10.0.0
-                    , aeson
-                    , invariant
                     , text
+    build-depends:    aeson
+                    , free
+                    , generic-data
+                    , generic-deriving
+                    , invariant
                     , unjson
-                    , one-liner
     hs-source-dirs:   app
     default-language: Haskell2010
 
