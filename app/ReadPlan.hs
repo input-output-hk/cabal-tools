@@ -54,8 +54,9 @@ import Distribution.Client.Types.SourceRepo
 
 import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..), OptionalStanzaMap, OptionalStanzaSet, optStanzaIndex, optStanzaSetFromList, optStanzaSetToList, optStanzaTabulate)
 
+import Control.Applicative ((<|>))
 import Control.Applicative.Free (Ap)
-import Data.Aeson as Aeson hiding (Key, Value)
+import Data.Aeson as Aeson hiding (Key, Result, Value)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types qualified as Aeson
@@ -66,6 +67,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Char8 qualified as C8
 import Data.ByteString.Lazy qualified as BL
+import Data.Functor (($>))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as M
 import Data.Set qualified as Set
@@ -78,7 +80,12 @@ import Data.Typeable (Typeable)
 import Data.Unjson
 import Distribution.Simple.Compiler (PackageDB)
 import Distribution.Simple.Setup (readPackageDb, readPackageDbList, showPackageDb, showPackageDbList)
+import Distribution.Solver.Types.ComponentDeps qualified as CD
+import Distribution.Types.ComponentName (ComponentName)
+import Distribution.Types.PkgconfigName
+import Distribution.Types.PkgconfigVersion
 import Generic.Data (Constructors, GBounded, GDatatype, GEnum, StandardEnum, gconName, gdatatypeName, genumFromTo, gmaxBound, gminBound)
+import Network.URI (URI, parseURI)
 
 unjsonElaboratedConfiguredPackage :: UnjsonDef ElaboratedConfiguredPackage
 unjsonElaboratedConfiguredPackage =
@@ -100,14 +107,14 @@ unjsonElaboratedConfiguredPackage =
             <*> fieldBy "elabBuildStyle/" elabBuildStyle "elabBuildStyle" unjsonGEnumOf
             <*> fieldBy "elabEnabledSpec/" elabEnabledSpec "elabEnabledSpec" unjsonShowRead
             <*> fieldBy "elabStanzasAvailable/" elabStanzasAvailable "elabStanzasAvailable" unjsonOptionalStanzaSet
-            <*> fieldBy "elabStanzasRequested/" elabStanzasRequested "elabStanzasRequested" (unjsonGenericAeson "OptionalStanzaMap (Maybe Bool)" defaultOptions)
+            <*> fieldBy "elabStanzasRequested/" elabStanzasRequested "elabStanzasRequested" (unjsonOptionalStanzaMap unjsonStanzaRequest)
             <*> fieldBy "elabPackageDbs/" elabPackageDbs "elabPackageDbs" (arrayOf unjsonPackageDb)
-            <*> fieldBy "elabSetupPackageDBStack/" elabSetupPackageDBStack "elabSetupPackageDBStack" _ -- unjsonPrettyParsec
-            <*> fieldBy "elabBuildPackageDBStack/" elabBuildPackageDBStack "elabBuildPackageDBStack" _ -- unjsonPrettyParsec
-            <*> fieldBy "elabRegisterPackageDBStack/" elabRegisterPackageDBStack "elabRegisterPackageDBStack" _ -- unjsonPrettyParsec
-            <*> fieldBy "elabInplaceSetupPackageDBStack/" elabInplaceSetupPackageDBStack "elabInplaceSetupPackageDBStack" _ -- unjsonPrettyParsec
-            <*> fieldBy "elabInplaceBuildPackageDBStack/" elabInplaceBuildPackageDBStack "elabInplaceBuildPackageDBStack" _ -- unjsonPrettyParsec
-            <*> fieldBy "elabInplaceRegisterPackageDBStack/" elabInplaceRegisterPackageDBStack "elabInplaceRegisterPackageDBStack" _ -- unjsonPrettyParsec
+            <*> fieldBy "elabSetupPackageDBStack/" elabSetupPackageDBStack "elabSetupPackageDBStack" (arrayOf unjsonShowRead)
+            <*> fieldBy "elabBuildPackageDBStack/" elabBuildPackageDBStack "elabBuildPackageDBStack" (arrayOf unjsonShowRead)
+            <*> fieldBy "elabRegisterPackageDBStack/" elabRegisterPackageDBStack "elabRegisterPackageDBStack" (arrayOf unjsonShowRead)
+            <*> fieldBy "elabInplaceSetupPackageDBStack/" elabInplaceSetupPackageDBStack "elabInplaceSetupPackageDBStack" (arrayOf unjsonShowRead)
+            <*> fieldBy "elabInplaceBuildPackageDBStack/" elabInplaceBuildPackageDBStack "elabInplaceBuildPackageDBStack" (arrayOf unjsonShowRead)
+            <*> fieldBy "elabInplaceRegisterPackageDBStack/" elabInplaceRegisterPackageDBStack "elabInplaceRegisterPackageDBStack" (arrayOf unjsonShowRead)
             <*> fieldOptBy "elabPkgDescriptionOverride/" elabPkgDescriptionOverride "elabPkgDescriptionOverride" (coerce unjsonUTF8LazyByteString)
             <*> fieldBy "elabVanillaLib/" elabVanillaLib "elabVanillaLib" unjsonPrettyParsec
             <*> fieldBy "elabSharedLib/" elabSharedLib "elabSharedLib" unjsonPrettyParsec
@@ -174,6 +181,10 @@ unjsonElaboratedConfiguredPackage =
             <*> fieldBy "elabBuildHaddocks/" elabBuildHaddocks "elabBuildHaddocks" unjsonPrettyParsec
             <*> fieldBy "elabPkgOrComp/" elabPkgOrComp "elabPkgOrComp" unjsonElaboratedPackageOrComponent
 
+-- | FIXME
+unjsonStanzaRequest :: UnjsonDef (Maybe Bool)
+unjsonStanzaRequest = unjsonShowRead
+
 unjsonPackageDb :: UnjsonDef (Maybe PackageDB)
 unjsonPackageDb =
     invmap readPackageDb showPackageDb unjsonDef
@@ -182,8 +193,18 @@ unjsonElaboratedPackageOrComponent :: UnjsonDef ElaboratedPackageOrComponent
 unjsonElaboratedPackageOrComponent =
     disjointUnionOf
         "ElaboratedPackageOrComponent"
-        [ ("ElabPackage", (== "ElabPackage") . gconName, ElabPackage <$> fieldBy "ElabPackage" projectElabPackage "ElabPackage" unjsonElaboratedPackage)
-        , ("ElabComponent", (== "ElabComponent") . gconName, ElabComponent <$> fieldBy "ElabComponent" projectElabComponent "ElabComponent" unjsonElaboratedComponent)
+        [
+            ( "ElabPackage"
+            , (== "ElabPackage") . gconName
+            , ElabPackage
+                <$> fieldBy "ElabPackage" projectElabPackage "ElabPackage" unjsonElaboratedPackage
+            )
+        ,
+            ( "ElabComponent"
+            , (== "ElabComponent") . gconName
+            , ElabComponent
+                <$> fieldBy "ElabComponent" projectElabComponent "ElabComponent" unjsonElaboratedComponent
+            )
         ]
   where
     projectElabPackage ~(ElabPackage elabPkg) = elabPkg
@@ -197,7 +218,7 @@ unjsonElaboratedComponent =
                 "compSolverName"
                 compSolverName
                 "The name of the component to be built according to the solver"
-                _
+                unjsonSolverComponent
             <*> fieldOptBy
                 "compComponentName"
                 compComponentName
@@ -222,7 +243,7 @@ unjsonElaboratedComponent =
                 "compPkgConfigDependencies"
                 compPkgConfigDependencies
                 "The @pkg-config@ dependencies of the component"
-                (arrayOf (unjsonTuple2By unjsonPrettyParsec unjsonPrettyParsec))
+                (arrayOf unjsonPkgconfig) -- (unjsonTuple2By unjsonPrettyParsec unjsonPrettyParsec))
             <*> fieldBy
                 "compExeDependencyPaths"
                 compExeDependencyPaths
@@ -234,15 +255,38 @@ unjsonElaboratedComponent =
                 "The UnitIds of the libraries (identifying elaborated packages/ components) that must be built before this project.  This is used purely for ordering purposes.  It can contain both references to definite and indefinite packages; an indefinite UnitId indicates that we must typecheck that indefinite package before we can build this one."
                 (arrayOf unjsonPrettyParsec)
 
+unjsonPkgconfig :: UnjsonDef (PkgconfigName, Maybe PkgconfigVersion)
+unjsonPkgconfig =
+    objectOf $
+        (,)
+            <$> fieldBy "name" fst "pkg-config name" unjsonPrettyParsec
+            <*> fieldOptBy "name" snd "pkg-config version" unjsonPrettyParsec
+
+unjsonSolverComponent :: UnjsonDef CD.Component
+unjsonSolverComponent =
+    unjsonInvmapR parse' prettyShow (unjsonDef @String)
+  where
+    parse' :: String -> Result CD.Component
+    parse' =
+        either fail return
+            . explicitEitherParsec
+                ( CD.componentNameToComponent <$> parsec
+                    <|> error "fixme, missing setup"
+                )
+
 unjsonConfiguredId :: UnjsonDef ConfiguredId
 unjsonConfiguredId = _
 
 unjsonElaboratedPackage :: UnjsonDef ElaboratedPackage
 unjsonElaboratedPackage = _
 
+-- | Fixing SubComponentTarget = WholeComponent
 unjsonComponentTarget :: UnjsonDef ComponentTarget
 unjsonComponentTarget =
-    invmap (`ComponentTarget` WholeComponent) (\(ComponentTarget cn _) -> cn) unjsonPrettyParsec
+    invmap
+        (`ComponentTarget` WholeComponent)
+        (\(ComponentTarget cn _) -> cn)
+        unjsonPrettyParsec
 
 class MyUnjson a where
     myUnjson :: UnjsonDef a
@@ -328,8 +372,144 @@ unjsonOptionalStanzaMap def =
 unjsonOptionalStanza :: UnjsonDef OptionalStanza
 unjsonOptionalStanza = unjsonGEnumOf
 
-unjsonPackageLocation :: UnjsonDef (PackageLocation local)
-unjsonPackageLocation = _ -- unjsonGenericAeson [] "PackageLocation" defaultOptions
+unjsonPackageLocation :: UnjsonDef (PackageLocation (Maybe FilePath))
+unjsonPackageLocation =
+    disjointUnionOf
+        "PackageLocation"
+        [
+            ( "LocalUnpackedPackage"
+            , (== "LocalUnpackedPackage") . gconName
+            , LocalUnpackedPackage
+                <$> fieldBy
+                    "path"
+                    (\case ~(LocalUnpackedPackage fp) -> fp)
+                    "path"
+                    unjsonDef
+            )
+        ,
+            ( "LocalTarballPackage"
+            , (== "LocalTarballPackage") . gconName
+            , LocalTarballPackage
+                <$> fieldBy
+                    "path"
+                    (\case ~(LocalTarballPackage fp) -> fp)
+                    "path"
+                    unjsonDef
+            )
+        ,
+            ( "RemoteTarballPackage"
+            , (== "RemoteTarballPackage") . gconName
+            , RemoteTarballPackage
+                <$> fieldBy
+                    "uri"
+                    (\case ~(RemoteTarballPackage uri _fp) -> uri)
+                    "uri"
+                    unjsonURI
+                <*> fieldOptBy
+                    "path"
+                    (\case ~(RemoteTarballPackage _uri fp) -> fp)
+                    "path"
+                    unjsonDef
+            )
+        ,
+            ( "RepoTarballPackage"
+            , (== "RepoTarballPackage") . gconName
+            , RepoTarballPackage
+                <$> fieldBy
+                    "repo"
+                    (\case ~(RepoTarballPackage repo _pkg _fp) -> repo)
+                    "repo"
+                    unjsonRepo
+                <*> fieldBy
+                    "packageId"
+                    (\case ~(RepoTarballPackage _repo pkg _fp) -> pkg)
+                    "packageId"
+                    unjsonPrettyParsec
+                <*> fieldOptBy
+                    "path"
+                    (\case ~(RepoTarballPackage _repo _pkg fp) -> fp)
+                    "path"
+                    unjsonDef
+            )
+        ,
+            ( "RemoteSourceRepoPackage"
+            , (== "RemoteSourceRepoPackage") . gconName
+            , RemoteSourceRepoPackage
+                <$> fieldBy
+                    "srp"
+                    (\case ~(RemoteSourceRepoPackage srp _fp) -> srp)
+                    "srp"
+                    unjsonSrp
+                <*> fieldOptBy
+                    "path"
+                    (\case ~(RemoteSourceRepoPackage _uri fp) -> fp)
+                    "path"
+                    unjsonDef
+            )
+        ]
+
+unjsonRepo :: UnjsonDef Repo
+unjsonRepo =
+    disjointUnionOf
+        "Repo"
+        [
+            ( "RepoLocalNoIndex"
+            , (== "RepoLocalNoIndex") . gconName
+            , RepoLocalNoIndex
+                <$> fieldBy
+                    "repoLocal"
+                    (\case ~(RepoLocalNoIndex repo _fp) -> repo)
+                    "repoLocal"
+                    unjsonPrettyParsec
+                <*> fieldBy
+                    "repoLocalDir"
+                    (\case ~(RepoLocalNoIndex _repo fp) -> fp)
+                    "repoLocalDir"
+                    unjsonDef
+            )
+        ,
+            ( "RepoRemote"
+            , (== "RepoRemote") . gconName
+            , RepoRemote
+                <$> fieldBy
+                    "repoRemote"
+                    (\case ~(RepoRemote repo _fp) -> repo)
+                    "repoRemote"
+                    unjsonPrettyParsec
+                <*> fieldBy
+                    "repoLocalDir"
+                    (\case ~(RepoRemote _repo fp) -> fp)
+                    "repoLocalDir"
+                    unjsonDef
+            )
+        ,
+            ( "RepoSecure"
+            , (== "RepoSecure") . gconName
+            , RepoSecure
+                <$> fieldBy
+                    "repoSecure"
+                    (\case ~(RepoSecure repo _fp) -> repo)
+                    "repoSecure"
+                    unjsonPrettyParsec
+                <*> fieldBy
+                    "repoLocalDir"
+                    (\case ~(RepoSecure _repo fp) -> fp)
+                    "repoLocalDir"
+                    unjsonDef
+            )
+        ]
+
+unjsonSrp :: UnjsonDef SourceRepoMaybe
+unjsonSrp = _
+
+unjsonURI :: UnjsonDef URI
+unjsonURI =
+    unjsonInvmapR
+        (maybe (fail "cannot parse URI") pure . parseURI)
+        show
+        (unjsonDef @String)
+
+-- unjsonGenericAeson "PackageLocation local" defaultOptions
 
 unjsonModuleShape :: UnjsonDef ModuleShape
 unjsonModuleShape =
@@ -352,13 +532,19 @@ unjsonPrettyParsec =
 unjsonShowRead :: (Show a, Read a) => UnjsonDef a
 unjsonShowRead = invmap read show unjsonDef
 
-unjsonGEnumOf :: forall a. (Eq a, Constructors a, GEnum StandardEnum (Rep a), GBounded (Rep a), GDatatype (Rep a)) => UnjsonDef a
+type EnumerableConstructors a = (Constructors a, GEnum StandardEnum (Rep a), GBounded (Rep a))
+
+unjsonGEnumOf
+    :: forall a
+     . ( Eq a
+       , EnumerableConstructors a
+       , GDatatype (Rep a)
+       )
+    => UnjsonDef a
 unjsonGEnumOf =
     enumOf
         (T.pack $ gdatatypeName @a)
         [(T.pack $ gconName bs, bs) | bs <- genumFromTo gminBound gmaxBound]
-
-type EnumerableConstructors a = (Constructors a, GEnum StandardEnum (Rep a), GBounded (Rep a))
 
 unjsonTotalMap :: forall k a. (Typeable a, Eq k, Typeable k, EnumerableConstructors k) => UnjsonDef a -> UnjsonDef (k -> a)
 unjsonTotalMap def =
@@ -378,9 +564,15 @@ allValues :: (Generic a, GEnum StandardEnum (Rep a), GBounded (Rep a)) => [a]
 allValues = genumFromTo gminBound gmaxBound
 
 -- | This is encoded as a list of pairs
-mapOfBy :: forall k v. (Ord k, Typeable k, Typeable v) => UnjsonDef k -> UnjsonDef v -> UnjsonDef (Map k v)
+mapOfBy
+    :: forall k v
+     . (Ord k, Typeable k, Typeable v)
+    => UnjsonDef k
+    -> UnjsonDef v
+    -> UnjsonDef (Map k v)
 mapOfBy uk uv =
-    invmap M.fromList M.toList $ arrayWithPrimaryKeyOf fst uk (unjsonTuple2By uk uv)
+    invmap M.fromList M.toList $
+        arrayWithPrimaryKeyOf fst uk (unjsonTuple2By uk uv)
 
 -- | Workaround because TupleFieldDef is not exposed
 unjsonTuple2By :: UnjsonDef k -> UnjsonDef v -> UnjsonDef (k, v)
