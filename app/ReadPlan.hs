@@ -10,19 +10,20 @@
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 {-# OPTIONS_GHC -Wno-unused-imports #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
-module Main where
+module ReadPlan (main) where
 
 import Control.Applicative ((<|>))
 import Control.Applicative.Free (Ap, hoistAp)
 import Control.Monad (unless)
-import Data.Aeson hiding (Result)
+import Data.Aeson (GFromJSON, GToJSON', Value, Zero)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types qualified as Aeson
 import Data.Bifunctor (Bifunctor (..))
-import Data.Binary
-import Data.Binary.Get
+import Data.Binary (Binary (get), Get)
+import Data.Binary.Get (runGetOrFail)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Char8 qualified as C8
@@ -30,14 +31,14 @@ import Data.ByteString.Lazy qualified as BL
 import Data.Coerce (coerce)
 import Data.Foldable (for_)
 import Data.Functor (($>))
-import Data.Functor.Contravariant
-import Data.Functor.Identity
+import Data.Functor.Contravariant ()
+import Data.Functor.Identity ()
 import Data.Functor.Invariant (invmap)
-import Data.Kind
+import Data.Kind (Type)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as M
 import Data.Maybe (fromJust)
-import Data.Proxy
+import Data.Proxy (Proxy (..))
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -48,48 +49,160 @@ import Data.Traversable (for)
 import Data.Tuple (swap)
 import Data.Typeable (Typeable)
 import Data.Unjson
-import Distribution.Backpack
-import Distribution.Backpack.ConfiguredComponent
-import Distribution.Backpack.ModuleShape
-import Distribution.Client.FileMonitor
-import Distribution.Client.HashValue
+  ( FieldDef (..),
+    Result,
+    Unjson (..),
+    UnjsonDef (SimpleUnjsonDef),
+    arrayOf,
+    arrayWithPrimaryKeyOf,
+    disjointUnionOf,
+    enumOf,
+    field,
+    fieldBy,
+    fieldOpt,
+    objectOf,
+    parse,
+    render,
+    unjsonAesonWithDoc,
+    unjsonInvmapR,
+    unjsonToJSON,
+  )
+import Distribution.Backpack (OpenModule, OpenUnitId)
+import Distribution.Backpack.ConfiguredComponent ()
+import Distribution.Backpack.ModuleShape (ModuleShape (..))
+import Distribution.CabalSpecVersion (CabalSpecVersion)
+import Distribution.Client.FileMonitor (MonitorStateFileSet)
+import Distribution.Client.HashValue (HashValue, showHashValue)
 import Distribution.Client.IndexUtils
-import Distribution.Client.InstallPlan
-import Distribution.Client.PackageHash
-import Distribution.Client.ProjectConfig
+  ( ActiveRepos,
+    TotalIndexState,
+  )
+import Distribution.Client.InstallPlan (toList)
+import Distribution.Client.PackageHash ()
+import Distribution.Client.ProjectConfig (ProjectConfig)
 import Distribution.Client.ProjectPlanning
+  ( BuildStyle,
+    ComponentTarget (..),
+    ElaboratedConfiguredPackage (..),
+    ElaboratedInstallPlan,
+    ElaboratedSharedConfig,
+    SubComponentTarget (WholeComponent),
+  )
 import Distribution.Client.ProjectPlanning.Types
+  ( ElaboratedComponent (..),
+    ElaboratedPackage,
+    ElaboratedPackageOrComponent (..),
+    SetupScriptStyle,
+  )
 import Distribution.Client.Types
+  ( ConfiguredId (..),
+    LocalRepo,
+    PackageLocation (..),
+    PackageSpecifier,
+    RemoteRepo,
+    Repo (RepoLocalNoIndex, RepoRemote, RepoSecure),
+    UnresolvedSourcePackage,
+  )
 import Distribution.Client.Types.SourceRepo
-import Distribution.Compat.Newtype
-import Distribution.ModuleName
+  ( SourceRepositoryPackage (..),
+  )
+import Distribution.Compat.Newtype ()
+import Distribution.License qualified
+import Distribution.ModuleName (ModuleName)
+import Distribution.PackageDescription
 import Distribution.Parsec
-import Distribution.Pretty
+  ( Parsec (..),
+    eitherParsec,
+    explicitEitherParsec,
+  )
+import Distribution.Pretty (Pretty, prettyShow)
+import Distribution.SPDX.License qualified
 import Distribution.Simple
+  ( CompilerFlavor,
+    ComponentId,
+    DebugInfoLevel,
+    Language,
+    Module,
+    OptimisationLevel,
+    PackageDB,
+    PackageId,
+    PackageName,
+    PerCompilerFlavor,
+    PkgconfigName,
+    ProfDetailLevel,
+    UnitId,
+    Version,
+    VersionRange,
+  )
 import Distribution.Simple.Compiler (PackageDB)
-import Distribution.Simple.InstallDirs (PathTemplate, fromPathTemplate, toPathTemplate)
-import Distribution.Simple.Setup (HaddockTarget, TestShowDetails, readPackageDb, readPackageDbList, showPackageDb, showPackageDbList)
+import Distribution.Simple.InstallDirs
+  ( InstallDirs,
+    PathTemplate,
+    fromPathTemplate,
+    toPathTemplate,
+  )
+import Distribution.Simple.Setup
+  ( DumpBuildInfo,
+    HaddockTarget,
+    TestShowDetails,
+    readPackageDb,
+    readPackageDbList,
+    showPackageDb,
+    showPackageDbList,
+  )
 import Distribution.Solver.Types.ComponentDeps qualified as CD
-import Distribution.Solver.Types.OptionalStanza (OptionalStanza (..), OptionalStanzaMap, OptionalStanzaSet, optStanzaIndex, optStanzaSetFromList, optStanzaSetToList, optStanzaTabulate)
-import Distribution.System
+import Distribution.Solver.Types.OptionalStanza
+  ( OptionalStanza (..),
+    OptionalStanzaMap,
+    OptionalStanzaSet,
+    optStanzaIndex,
+    optStanzaSetFromList,
+    optStanzaSetToList,
+    optStanzaTabulate,
+  )
 import Distribution.Types.ComponentName (ComponentName)
 import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec (..))
-import Distribution.Types.Flag
-import Distribution.Types.PackageDescription
-import Distribution.Types.PackageId
-import Distribution.Types.PkgconfigName
-import Distribution.Types.PkgconfigVersion
-import Distribution.Types.SourceRepo
-import Distribution.Types.UnitId
-import Distribution.Utils.ShortText (ShortText, fromShortText)
-import Distribution.Utils.Structured hiding (typeName)
+import Distribution.Types.Flag (FlagAssignment)
+import Distribution.Types.PackageDescription (PackageDescription)
+import Distribution.Types.PkgconfigVersion (PkgconfigVersion (..))
+import Distribution.Types.SourceRepo (RepoType, SourceRepo)
+import Distribution.Utils.Path
+import Distribution.Utils.ShortText (ShortText, fromShortText, toShortText)
+import Distribution.Utils.Structured (Structured, Tag)
 import GHC.Generics
-import GHC.TypeLits
-import Generic.Data (Constructors, GBounded, GDatatype, GEnum, GenericProduct (..), MetaConsRecord, MetaOf, StandardEnum, gconName, gdatatypeName, genumFromTo, gmaxBound, gminBound)
+  ( C1,
+    Constructor (..),
+    D1,
+    Datatype (..),
+    Generic (..),
+    K1 (..),
+    M1 (..),
+    Meta (..),
+    S1,
+    Selector (selName),
+    type (:*:) (..),
+  )
+import GHC.TypeLits ()
+import Generic.Data
+  ( Constructors,
+    GBounded,
+    GDatatype,
+    GEnum,
+    GenericProduct (..),
+    MetaConsRecord,
+    MetaOf,
+    MetaSelName,
+    StandardEnum,
+    gconName,
+    gdatatypeName,
+    genumFromTo,
+    gmaxBound,
+    gminBound,
+  )
 import Generic.Data.Internal.Meta (GDatatype (..))
-import Lens.Micro hiding (to)
+import Language.Haskell.Extension
 import Network.URI (URI, parseURI)
-import System.IO
+import System.IO (IOMode (ReadMode), withBinaryFile)
 import Text.Read (readMaybe)
 
 -- Note: contramapFieldDef and contramapTupleFieldDef are basically
@@ -102,9 +215,6 @@ contramapFieldDef f (FieldOptDef name doc ext d) = FieldOptDef name doc (ext . f
 contramapFieldDef f (FieldDefDef name doc def ext d) = FieldDefDef name doc def (ext . f) d
 contramapFieldDef f (FieldRODef name doc ext d) = FieldRODef name doc (ext . f) d
 
--- class ToField' s f where
---   toField' :: f p -> (s -> a) -> Ap (FieldDef s) a
-
 -- data    V1        p                       -- lifted version of Empty
 -- data    U1        p = U1                  -- lifted version of ()
 -- data    (:+:) f g p = L1 (f p) | R1 (g p) -- lifted version of Either
@@ -112,313 +222,157 @@ contramapFieldDef f (FieldRODef name doc ext d) = FieldRODef name doc (ext . f) 
 -- newtype K1    i c p = K1 { unK1 :: c }    -- a container for a c
 -- newtype M1  i t f p = M1 { unM1 :: f p }  -- a wrapper
 
--- FieldDef s a
---  s structure
---  a element
+-- instance (FieldDef' a) => Unjson a where
+--   unjsonDef = objectOf fieldDef'
 
 class FieldDef' a where
   fieldDef' :: Ap (FieldDef a) a
   default fieldDef' :: (Generic a, GFieldDef' (Rep a)) => Ap (FieldDef a) a
   fieldDef' = to <$> hoistAp (contramapFieldDef from) gFieldDef'
 
-class GFieldDef' ra where
-  gFieldDef' :: Ap (FieldDef (ra x)) (ra x)
+gfieldDef' :: (Generic a, GFieldDef' (Rep a)) => Ap (FieldDef a) a
+gfieldDef' = to <$> hoistAp (contramapFieldDef from) gFieldDef'
 
-instance (GFieldDef' ra) => GFieldDef' (D1 t ra) where
+class GFieldDef' f where
+  gFieldDef' :: Ap (FieldDef (f p)) (f p)
+
+instance (GFieldDef' f) => GFieldDef' (D1 t f) where
   gFieldDef' = M1 <$> hoistAp (contramapFieldDef unM1) gFieldDef'
 
-instance (GFieldDef' ra) => GFieldDef' (C1 t ra) where
+instance (GFieldDef' f) => GFieldDef' (C1 t f) where
   gFieldDef' = M1 <$> hoistAp (contramapFieldDef unM1) gFieldDef'
 
-instance (GFieldDef' ra) => GFieldDef' (S1 t ra) where
-  gFieldDef' = M1 <$> hoistAp (contramapFieldDef unM1) gFieldDef'
+data HProxy s (f :: Type -> Type) a = HProxy
 
-instance (Typeable c, Unjson c) => GFieldDef' (K1 i c) where
-  gFieldDef' = K1 <$> hoistAp (contramapFieldDef unK1) (field "" id "")
+instance {-# OVERLAPPING #-} (Typeable c, Unjson c, Selector t) => GFieldDef' (S1 t (K1 i (Maybe c))) where
+  gFieldDef' = M1 . K1 <$> hoistAp (contramapFieldDef (unK1 . unM1)) (fieldOpt name id name)
+    where
+      name = T.pack $ selName (HProxy :: HProxy t f a)
+
+instance (Typeable c, Unjson c, Selector t) => GFieldDef' (S1 t (K1 i c)) where
+  gFieldDef' = M1 . K1 <$> hoistAp (contramapFieldDef (unK1 . unM1)) (field name id name)
+    where
+      name = T.pack $ selName (HProxy :: HProxy t f a)
 
 instance (GFieldDef' l, GFieldDef' r) => GFieldDef' (l :*: r) where
-  gFieldDef' :: Ap (FieldDef ((:*:) l r x)) ((:*:) l r x)
-  gFieldDef' =
-    let l = gFieldDef' @l
-        r = gFieldDef' @r
-        l' = hoistAp (contramapFieldDef fst') l
-        r' = hoistAp (contramapFieldDef snd') r
-     in liftA2 (:*:) l' r'
-
--- where
---   name = T.pack $ symbolVal (Proxy :: Proxy n)
-
--- gFieldDef' :: forall pr. Ap (FieldDef ((:*:) l r pl)) ((:*:) l r pr)
--- gFieldDef' =
---   let l = gFieldDef' @l
---       r = gFieldDef' @r
---       l' = hoistAp (contramapFieldDef fst') l :: Ap (FieldDef ((:*:) l r p)) a
---       r' = hoistAp (contramapFieldDef snd') r :: Ap (FieldDef ((:*:) l r p)) a
---    in _
-
-fst' :: (f :*: g) p -> f p
-fst' (f :*: _) = f
-
-snd' :: (f :*: g) p -> g p
-snd' (_ :*: g) = g
-
-newtype A = A {unA :: Int} deriving (Generic)
-
-instance FieldDef' A
+  gFieldDef' :: Ap (FieldDef ((l :*: r) p)) ((l :*: r) p)
+  gFieldDef' = liftA2 (:*:) l r
+    where
+      l = hoistAp (contramapFieldDef fst') gFieldDef'
+      r = hoistAp (contramapFieldDef snd') gFieldDef'
+      fst' (f :*: _) = f
+      snd' (_ :*: g) = g
 
 instance FieldDef' PackageId
 
--- class GExtractSelector (f :: Type -> Type) (s :: Type) (a :: Type) where
---   gExtractSelector :: Proxy f -> Ap (FieldDef s) a
---
--- instance (Unjson a, Typeable a) => GExtractSelector (f :*: g) s a where
---   gExtractSelector = _
---
--- instance (Unjson a, Typeable a, KnownSymbol nm, Rep s ~ f) => GExtractSelector (M1 S (MetaSel (Just nm) su ss ds) (K1 i a)) s a where
---   gExtractSelector proxy = field name (unK1 . unM1) name
---     where
---       name = T.pack $ symbolVal (Proxy :: Proxy nm)
+instance Unjson ElaboratedConfiguredPackage where
+  unjsonDef = objectOf gfieldDef'
 
--- test :: Ap (FieldDef ConfiguredId) ConfiguredId
--- test = toFieldCons' (Proxy @ConfiguredId) (Proxy @ConfiguredId)
+instance (Typeable a, Unjson a) => Unjson (InstallDirs a) where
+  unjsonDef = objectOf gfieldDef'
 
--- test :: Ap (FieldDef PackageName) PackageName
--- test = toFieldCons' Proxy Proxy Proxy from
+deriving via UnjsonEnumeration DumpBuildInfo instance Unjson DumpBuildInfo
 
--- class ToField s where
---   toField :: s -> Ap (FieldDef s) s
---   default toField :: (Generic s, ToField' s (Rep s)) => s -> Ap (FieldDef s) s
---   toField x = toField' (from x)
+deriving via UnjsonEnumeration DebugInfoLevel instance Unjson DebugInfoLevel
 
-unjsonElaboratedConfiguredPackage :: UnjsonDef ElaboratedConfiguredPackage
-unjsonElaboratedConfiguredPackage =
-  objectOf $
-    ElaboratedConfiguredPackage
-      <$> field "elabUnitId/" elabUnitId "elabUnitId"
-      <*> field "elabComponentId/" elabComponentId "elabComponentId"
-      <*> fieldBy "elabInstantiatedWith/" elabInstantiatedWith "elabInstantiatedWith" (mapOfBy unjsonDef unjsonDef)
-      <*> fieldBy "elabLinkedInstantiatedWith/" elabLinkedInstantiatedWith "elabLinkedInstantiatedWith" (mapOfBy unjsonDef unjsonDef)
-      <*> field "elabIsCanonical/" elabIsCanonical "elabIsCanonical"
-      <*> field "elabPkgSourceId/" elabPkgSourceId "elabPkgSourceId"
-      <*> fieldBy "elabModuleShape/" elabModuleShape "elabModuleShape" unjsonModuleShape
-      <*> field "elabFlagAssignment/" elabFlagAssignment "elabFlagAssignment"
-      <*> field "elabFlagDefaults/" elabFlagDefaults "elabFlagDefaults"
-      <*> fieldBy "elabPkgDescription/" elabPkgDescription "elabPkgDescription" unjsonPackageDescription
-      <*> fieldBy "elabPkgSourceLocation/" elabPkgSourceLocation "elabPkgSourceLocation" unjsonPackageLocation
-      <*> fieldOpt "elabPkgSourceHash/" elabPkgSourceHash "elabPkgSourceHash"
-      <*> field "elabLocalToProject/" elabLocalToProject "elabLocalToProject"
-      <*> field "elabBuildStyle/" elabBuildStyle "elabBuildStyle"
-      <*> field "elabEnabledSpec/" elabEnabledSpec "elabEnabledSpec"
-      <*> field "elabStanzasAvailable/" elabStanzasAvailable "elabStanzasAvailable"
-      <*> field "elabStanzasRequested/" elabStanzasRequested "elabStanzasRequested"
-      <*> fieldBy "elabPackageDbs/" elabPackageDbs "elabPackageDbs" (arrayOf unjsonPackageDb)
-      <*> field "elabSetupPackageDBStack/" elabSetupPackageDBStack "elabSetupPackageDBStack"
-      <*> field "elabBuildPackageDBStack/" elabBuildPackageDBStack "elabBuildPackageDBStack"
-      <*> field "elabRegisterPackageDBStack/" elabRegisterPackageDBStack "elabRegisterPackageDBStack"
-      <*> field "elabInplaceSetupPackageDBStack/" elabInplaceSetupPackageDBStack "elabInplaceSetupPackageDBStack"
-      <*> field "elabInplaceBuildPackageDBStack/" elabInplaceBuildPackageDBStack "elabInplaceBuildPackageDBStack"
-      <*> field "elabInplaceRegisterPackageDBStack/" elabInplaceRegisterPackageDBStack "elabInplaceRegisterPackageDBStack"
-      <*> fieldOpt "elabPkgDescriptionOverride/" elabPkgDescriptionOverride "elabPkgDescriptionOverride"
-      <*> field "elabVanillaLib/" elabVanillaLib "elabVanillaLib"
-      <*> field "elabSharedLib/" elabSharedLib "elabSharedLib"
-      <*> field "elabStaticLib/" elabStaticLib "elabStaticLib"
-      <*> field "elabDynExe/" elabDynExe "elabDynExe"
-      <*> field "elabFullyStaticExe/" elabFullyStaticExe "elabFullyStaticExe"
-      <*> field "elabGHCiLib/" elabGHCiLib "elabGHCiLib"
-      <*> field "elabProfLib/" elabProfLib "elabProfLib"
-      <*> field "elabProfExe/" elabProfExe "elabProfExe"
-      <*> field "elabProfLibDetail/" elabProfLibDetail "elabProfLibDetail"
-      <*> fieldBy "elabProfExeDetail/" elabProfExeDetail "elabProfExeDetail" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> field "elabCoverage/" elabCoverage "elabCoverage"
-      <*> fieldBy "elabOptimization/" elabOptimization "elabOptimization" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> field "elabSplitObjs/" elabSplitObjs "elabSplitObjs"
-      <*> field "elabSplitSections/" elabSplitSections "elabSplitSections"
-      <*> field "elabStripLibs/" elabStripLibs "elabStripLibs"
-      <*> field "elabStripExes/" elabStripExes "elabStripExes"
-      <*> fieldBy "elabDebugInfo/" elabDebugInfo "elabDebugInfo" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> fieldBy "elabDumpBuildInfo/" elabDumpBuildInfo "elabDumpBuildInfo" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> field "elabProgramPaths/" elabProgramPaths "elabProgramPaths"
-      <*> field "elabProgramArgs/" elabProgramArgs "elabProgramArgs"
-      <*> fieldBy "elabProgramPathExtra/" elabProgramPathExtra "elabProgramPathExtra" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> field "elabConfigureScriptArgs/" elabConfigureScriptArgs "elabConfigureScriptArgs"
-      <*> field "elabExtraLibDirs/" elabExtraLibDirs "elabExtraLibDirs"
-      <*> field "elabExtraLibDirsStatic/" elabExtraLibDirsStatic "elabExtraLibDirsStatic"
-      <*> field "elabExtraFrameworkDirs/" elabExtraFrameworkDirs "elabExtraFrameworkDirs"
-      <*> field "elabExtraIncludeDirs/" elabExtraIncludeDirs "elabExtraIncludeDirs"
-      <*> fieldOpt "elabProgPrefix/" elabProgPrefix "elabProgPrefix"
-      <*> fieldOpt "elabProgSuffix/" elabProgSuffix "elabProgSuffix"
-      <*> fieldBy "elabInstallDirs/" elabInstallDirs "elabInstallDirs" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> field "elabHaddockHoogle/" elabHaddockHoogle "elabHaddockHoogle"
-      <*> field "elabHaddockHtml/" elabHaddockHtml "elabHaddockHtml"
-      <*> fieldOpt "elabHaddockHtmlLocation/" elabHaddockHtmlLocation "elabHaddockHtmlLocation"
-      <*> field "elabHaddockForeignLibs/" elabHaddockForeignLibs "elabHaddockForeignLibs"
-      <*> field "elabHaddockForHackage/" elabHaddockForHackage "elabHaddockForHackage"
-      <*> field "elabHaddockExecutables/" elabHaddockExecutables "elabHaddockExecutables"
-      <*> field "elabHaddockTestSuites/" elabHaddockTestSuites "elabHaddockTestSuites"
-      <*> field "elabHaddockBenchmarks/" elabHaddockBenchmarks "elabHaddockBenchmarks"
-      <*> field "elabHaddockInternal/" elabHaddockInternal "elabHaddockInternal"
-      <*> fieldOpt "elabHaddockCss/" elabHaddockCss "elabHaddockCss"
-      <*> field "elabHaddockLinkedSource/" elabHaddockLinkedSource "elabHaddockLinkedSource"
-      <*> field "elabHaddockQuickJump/" elabHaddockQuickJump "elabHaddockQuickJump"
-      <*> fieldOpt "elabHaddockHscolourCss/" elabHaddockHscolourCss "elabHaddockHscolourCss"
-      <*> fieldOpt "elabHaddockContents/" elabHaddockContents "elabHaddockContents"
-      <*> fieldOpt "elabHaddockIndex/" elabHaddockIndex "elabHaddockIndex"
-      <*> fieldOpt "elabHaddockBaseUrl/" elabHaddockBaseUrl "elabHaddockBaseUrl"
-      <*> fieldOpt "elabHaddockLib/" elabHaddockLib "elabHaddockLib"
-      <*> fieldOpt "elabTestMachineLog/" elabTestMachineLog "elabTestMachineLog"
-      <*> fieldOpt "elabTestHumanLog/" elabTestHumanLog "elabTestHumanLog"
-      <*> fieldOpt "elabTestShowDetails/" elabTestShowDetails "elabTestShowDetails"
-      <*> field "elabTestKeepTix/" elabTestKeepTix "elabTestKeepTix"
-      <*> fieldOpt "elabTestWrapper/" elabTestWrapper "elabTestWrapper"
-      <*> field "elabTestFailWhenNoTestSuites/" elabTestFailWhenNoTestSuites "elabTestFailWhenNoTestSuites"
-      <*> field "elabTestTestOptions/" elabTestTestOptions "elabTestTestOptions"
-      <*> field "elabBenchmarkOptions/" elabBenchmarkOptions "elabBenchmarkOptions"
-      <*> fieldBy "elabSetupScriptStyle/" elabSetupScriptStyle "elabSetupScriptStyle" (unjsonGenericAeson "elabSetupScriptStyle" Aeson.defaultOptions)
-      <*> field "elabSetupScriptCliVersion/" elabSetupScriptCliVersion "elabSetupScriptCliVersion"
-      <*> field "elabConfigureTargets/" elabConfigureTargets "elabConfigureTargets"
-      <*> field "elabBuildTargets/" elabBuildTargets "elabBuildTargets"
-      <*> field "elabTestTargets/" elabTestTargets "elabTestTargets"
-      <*> field "elabBenchTargets/" elabBenchTargets "elabBenchTargets"
-      <*> fieldOpt "elabReplTarget/" elabReplTarget "elabReplTarget"
-      <*> field "elabHaddockTargets/" elabHaddockTargets "elabHaddockTargets"
-      <*> field "elabBuildHaddocks/" elabBuildHaddocks "elabBuildHaddocks"
-      <*> fieldBy "elabPkgOrComp/" elabPkgOrComp "elabPkgOrComp" unjsonElaboratedPackageOrComponent
+deriving via UnjsonEnumeration SetupScriptStyle instance Unjson SetupScriptStyle
 
-unjsonModuleShape :: UnjsonDef ModuleShape
-unjsonModuleShape =
-  objectOf $
-    ModuleShape
-      <$> fieldBy "modShapeProvides" modShapeProvides "modShapeProvides" (mapOfBy unjsonDef unjsonDef)
-      <*> field "modShapeRequires" modShapeRequires "modShapeRequires"
+instance Unjson ModuleShape where
+  unjsonDef = objectOf gfieldDef'
 
-unjsonPackageDb :: UnjsonDef (Maybe PackageDB)
-unjsonPackageDb =
-  invmap readPackageDb showPackageDb unjsonDef
+instance (Typeable a, Unjson a) => Unjson (Map ModuleName a) where
+  unjsonDef = mapOfBy
 
-unjsonElaboratedPackageOrComponent :: UnjsonDef ElaboratedPackageOrComponent
-unjsonElaboratedPackageOrComponent =
-  disjointUnionOf
-    "ElaboratedPackageOrComponent"
-    [ ( "ElabPackage",
-        (== "ElabPackage") . gconName,
-        ElabPackage
-          <$> fieldBy "ElabPackage" projectElabPackage "ElabPackage" unjsonElaboratedPackage
-      ),
-      ( "ElabComponent",
-        (== "ElabComponent") . gconName,
-        ElabComponent
-          <$> fieldBy "ElabComponent" projectElabComponent "ElabComponent" unjsonElaboratedComponent
-      )
-    ]
-  where
-    projectElabPackage ~(ElabPackage elabPkg) = elabPkg
-    projectElabComponent ~(ElabComponent elabComp) = elabComp
+instance Unjson (Maybe PackageDB) where
+  unjsonDef = invmap readPackageDb showPackageDb unjsonDef
 
-unjsonElaboratedComponent :: UnjsonDef ElaboratedComponent
-unjsonElaboratedComponent =
-  objectOf $
-    ElaboratedComponent
-      <$> field
-        "compSolverName"
-        compSolverName
-        "The name of the component to be built according to the solver"
-      <*> fieldOpt
-        "compComponentName"
-        compComponentName
-        "The name of the component to be built. Nothing if it's a setup dep"
-      <*> field
-        "compLibDependencies"
-        compLibDependencies
-        "The *external* library dependencies of this component. We pass this to the configure script."
-      <*> field
-        "compLinkedLibDependencies"
-        compLinkedLibDependencies
-        "In a component prior to instantiation, this list specifies the 'OpenUnitId's which, after instantiation, are the actual dependencies of this package.  Note that this does NOT include signature packages, which do not turn into real ordering dependencies when we instantiate.  This is intended to be a purely temporary field, to carry some information to the instantiation phase. It's more precise than 'compLibDependencies', and also stores information about internal dependencies."
-      <*> field
-        "compExeDependencies"
-        compExeDependencies
-        "The executable dependencies of this component (including internal executables)."
-      <*> fieldBy
-        "compPkgConfigDependencies"
-        compPkgConfigDependencies
-        "The @pkg-config@ dependencies of the component"
-        (arrayOf unjsonPkgconfig) -- (unjsonTuple2By unjsonPrettyParsec unjsonPrettyParsec))
-      <*> fieldBy
-        "compExeDependencyPaths"
-        compExeDependencyPaths
-        "The paths all our executable dependencies will be installed to once they are installed."
-        (arrayOf (unjsonTuple2By unjsonDef unjsonDef))
-      <*> field
-        "compOrderLibDependencies"
-        compOrderLibDependencies
-        "The UnitIds of the libraries (identifying elaborated packages/ components) that must be built before this project.  This is used purely for ordering purposes.  It can contain both references to definite and indefinite packages; an indefinite UnitId indicates that we must typecheck that indefinite package before we can build this one."
+instance Unjson ElaboratedPackageOrComponent where
+  unjsonDef =
+    disjointUnionOf
+      "ElaboratedPackageOrComponent"
+      [ ( "ElabPackage",
+          (== "ElabPackage") . gconName,
+          ElabPackage
+            <$> field "ElabPackage" projectElabPackage "ElabPackage"
+        ),
+        ( "ElabComponent",
+          (== "ElabComponent") . gconName,
+          ElabComponent
+            <$> field "ElabComponent" projectElabComponent "ElabComponent"
+        )
+      ]
+    where
+      projectElabPackage ~(ElabPackage elabPkg) = elabPkg
+      projectElabComponent ~(ElabComponent elabComp) = elabComp
 
-unjsonPkgconfig :: UnjsonDef (PkgconfigName, Maybe PkgconfigVersion)
-unjsonPkgconfig =
-  objectOf $ (,) <$> field "name" fst "pkg-config name" <*> fieldOpt "name" snd "pkg-config version"
+instance Unjson ElaboratedComponent where
+  unjsonDef = objectOf gfieldDef'
 
-unjsonPackageLocation :: UnjsonDef (PackageLocation (Maybe FilePath))
-unjsonPackageLocation =
-  disjointUnionOf
-    "PackageLocation"
-    [ ( "LocalUnpackedPackage",
-        (== "LocalUnpackedPackage") . gconName,
-        LocalUnpackedPackage
-          <$> field
-            "path"
-            (\case ~(LocalUnpackedPackage fp) -> fp)
-            "path"
-      ),
-      ( "LocalTarballPackage",
-        (== "LocalTarballPackage") . gconName,
-        LocalTarballPackage
-          <$> field
-            "path"
-            (\case ~(LocalTarballPackage fp) -> fp)
-            "path"
-      ),
-      ( "RemoteTarballPackage",
-        (== "RemoteTarballPackage") . gconName,
-        RemoteTarballPackage
-          <$> field
-            "uri"
-            (\case ~(RemoteTarballPackage uri _fp) -> uri)
-            "uri"
-          <*> fieldOpt
-            "path"
-            (\case ~(RemoteTarballPackage _uri fp) -> fp)
-            "path"
-      ),
-      ( "RepoTarballPackage",
-        (== "RepoTarballPackage") . gconName,
-        RepoTarballPackage
-          <$> fieldBy
-            "repo"
-            (\case ~(RepoTarballPackage repo _pkg _fp) -> repo)
-            "repo"
-            unjsonRepo
-          <*> field
-            "packageId"
-            (\case ~(RepoTarballPackage _repo pkg _fp) -> pkg)
-            "packageId"
-          <*> fieldOpt
-            "path"
-            (\case ~(RepoTarballPackage _repo _pkg fp) -> fp)
-            "path"
-      ),
-      ( "RemoteSourceRepoPackage",
-        (== "RemoteSourceRepoPackage") . gconName,
-        RemoteSourceRepoPackage
-          <$> field
-            "srp"
-            (\case ~(RemoteSourceRepoPackage srp _fp) -> srp)
-            "srp"
-          <*> fieldOpt
-            "path"
-            (\case ~(RemoteSourceRepoPackage _uri fp) -> fp)
-            "path"
-      )
-    ]
+instance {-# INCOHERENT #-} Unjson (PkgconfigName, Maybe PkgconfigVersion) where
+  unjsonDef = objectOf gfieldDef'
+
+instance (Unjson a, Typeable a) => Unjson (PackageLocation (Maybe a)) where
+  unjsonDef =
+    disjointUnionOf
+      "PackageLocation"
+      [ ( "LocalUnpackedPackage",
+          (== "LocalUnpackedPackage") . gconName,
+          LocalUnpackedPackage
+            <$> field
+              "path"
+              (\case ~(LocalUnpackedPackage fp) -> fp)
+              "path"
+        ),
+        ( "LocalTarballPackage",
+          (== "LocalTarballPackage") . gconName,
+          LocalTarballPackage
+            <$> field
+              "path"
+              (\case ~(LocalTarballPackage fp) -> fp)
+              "path"
+        ),
+        ( "RemoteTarballPackage",
+          (== "RemoteTarballPackage") . gconName,
+          RemoteTarballPackage
+            <$> field
+              "uri"
+              (\case ~(RemoteTarballPackage uri _fp) -> uri)
+              "uri"
+            <*> fieldOpt
+              "path"
+              (\case ~(RemoteTarballPackage _uri fp) -> fp)
+              "path"
+        ),
+        ( "RepoTarballPackage",
+          (== "RepoTarballPackage") . gconName,
+          RepoTarballPackage
+            <$> fieldBy
+              "repo"
+              (\case ~(RepoTarballPackage repo _pkg _fp) -> repo)
+              "repo"
+              unjsonRepo
+            <*> field
+              "packageId"
+              (\case ~(RepoTarballPackage _repo pkg _fp) -> pkg)
+              "packageId"
+            <*> fieldOpt
+              "path"
+              (\case ~(RepoTarballPackage _repo _pkg fp) -> fp)
+              "path"
+        ),
+        ( "RemoteSourceRepoPackage",
+          (== "RemoteSourceRepoPackage") . gconName,
+          RemoteSourceRepoPackage
+            <$> field
+              "srp"
+              (\case ~(RemoteSourceRepoPackage srp _fp) -> srp)
+              "srp"
+            <*> fieldOpt
+              "path"
+              (\case ~(RemoteSourceRepoPackage _uri fp) -> fp)
+              "path"
+        )
+      ]
 
 unjsonRepo :: UnjsonDef Repo
 unjsonRepo =
@@ -517,6 +471,8 @@ deriving via UnjsonShowRead PackageDB instance Unjson PackageDB
 
 deriving via UnjsonPrettyParsec PkgconfigName instance Unjson PkgconfigName
 
+deriving via UnjsonEnumeration OptimisationLevel instance Unjson OptimisationLevel
+
 deriving via UnjsonPrettyParsec PkgconfigVersion instance Unjson PkgconfigVersion
 
 deriving via UnjsonPrettyParsec RemoteRepo instance Unjson RemoteRepo
@@ -569,26 +525,16 @@ instance Unjson HashValue where
         GHC.Generics.to . M1 . M1 . M1 . K1 <$> Base16.decode (C8.pack value)
 
 instance Unjson ConfiguredId where
-  unjsonDef =
-    objectOf $
-      ConfiguredId
-        <$> field "confSrcId" confSrcId "confSrcId"
-        <*> fieldOpt "confCompName" confCompName "confCompName"
-        <*> field "confInstId" confInstId "confInstId"
+  unjsonDef = objectOf gfieldDef'
 
 instance Unjson (SourceRepositoryPackage Maybe) where
-  unjsonDef =
-    objectOf $
-      SourceRepositoryPackage
-        <$> field "srpType" srpType "srpType"
-        <*> field "srpLocation" srpLocation "srpLocation"
-        <*> fieldOpt "srpTag" srpTag "srpTag"
-        <*> fieldOpt "srpBranch" srpBranch "srpBranch"
-        <*> fieldOpt "srpSubdir" srpSubdir "srpSubdir"
-        <*> field "srpCommand" srpCommand "srpCommand"
+  unjsonDef = objectOf gfieldDef'
 
-unjsonElaboratedPackage :: UnjsonDef ElaboratedPackage
-unjsonElaboratedPackage = undefined
+instance Unjson ElaboratedPackage where
+  unjsonDef = objectOf gfieldDef'
+
+instance (Monoid a, Typeable a, Unjson a) => Unjson (CD.ComponentDeps a) where
+  unjsonDef = invmap CD.fromList CD.toList unjsonDef
 
 -- | TODO: Fixing SubComponentTarget = WholeComponent for the moment
 instance Unjson ComponentTarget where
@@ -598,42 +544,113 @@ instance Unjson ComponentTarget where
       (\(ComponentTarget cn _) -> cn)
       unjsonDef
 
-unjsonPackageDescription :: UnjsonDef PackageDescription
-unjsonPackageDescription = undefined
+deriving via UnjsonEnumeration BuildStyle instance Unjson BuildStyle
 
--- unjsonStructured :: forall a. (Structured a) => UnjsonDef a
--- unjsonStructured =
---     case structure (Proxy :: Proxy a) of
---         Nominal tyRep tyVer tyName tyTags ->
---             unjsonStructuredNominal tyRep tyVer tyName tyTags
---         Newtype tyRep tyVer tyName ty ->
---             unjsonStructuredNewType tyRep tyVer tyName ty
---         Structure tyRep tyVer tyName tySop ->
---             unjsonStructuredStructure tyRep tyVer tyName tySop
---
--- unjsonStructuredStructure
---     :: SomeTypeRep
---     -> TypeVersion
---     -> TypeName
---     -> SopStructure
---     -> UnjsonDef a
--- unjsonStructuredStructure = _
---
--- unjsonStructuredNewType
---     :: SomeTypeRep
---     -> TypeVersion
---     -> TypeName
---     -> Structure
---     -> UnjsonDef a
--- unjsonStructuredNewType = _
---
--- unjsonStructuredNominal
---     :: SomeTypeRep
---     -> TypeVersion
---     -> TypeName
---     -> [Structure]
---     -> UnjsonDef a
--- unjsonStructuredNominal = _
+instance Unjson TestSuiteInterface where
+  unjsonDef =
+    disjointUnionOf
+      "TestSuiteExeV10"
+      [ ( "TestSuiteExeV10",
+          (== "TestSuiteExeV10") . gconName,
+          TestSuiteExeV10
+            <$> field "Version" (\(TestSuiteExeV10 v _) -> v) "Version"
+            <*> field "FilePath" (\(TestSuiteExeV10 _ p) -> p) "FilePath"
+        ),
+        ( "TestSuiteLibV09",
+          (== "TestSuiteLibV09") . gconName,
+          TestSuiteLibV09
+            <$> field "Version" (\(TestSuiteLibV09 v _) -> v) "Version"
+            <*> field "ModulePath" (\(TestSuiteLibV09 _ m) -> m) "ModulePath"
+        ),
+        ( "TestSuiteUnsupported",
+          (== "TestSuiteUnsupported") . gconName,
+          TestSuiteUnsupported
+            <$> field "TestType" (\(TestSuiteUnsupported t) -> t) "TestType"
+        )
+      ]
+
+deriving via UnjsonEnumeration LibraryVisibility instance Unjson LibraryVisibility
+
+-- | FIXME
+deriving via UnjsonShowRead (Either Distribution.SPDX.License.License Distribution.License.License) instance Unjson (Either Distribution.SPDX.License.License Distribution.License.License)
+
+deriving via UnjsonPrettyParsec Distribution.SPDX.License.License instance Unjson Distribution.SPDX.License.License
+
+deriving via UnjsonPrettyParsec (SymbolicPath a b) instance Unjson (SymbolicPath a b)
+
+deriving via UnjsonPrettyParsec CompilerFlavor instance Unjson CompilerFlavor
+
+deriving via UnjsonPrettyParsec TestType instance Unjson TestType
+
+deriving via UnjsonPrettyParsec VersionRange instance Unjson VersionRange
+
+deriving via UnjsonPrettyParsec RepoKind instance Unjson RepoKind
+
+deriving via UnjsonPrettyParsec BuildType instance Unjson BuildType
+
+deriving via UnjsonPrettyParsec Dependency instance Unjson Dependency
+
+deriving via UnjsonPrettyParsec LegacyExeDependency instance Unjson LegacyExeDependency
+
+deriving via UnjsonPrettyParsec ExeDependency instance Unjson ExeDependency
+
+deriving via UnjsonPrettyParsec PkgconfigDependency instance Unjson PkgconfigDependency
+
+deriving via UnjsonPrettyParsec Language instance Unjson Language
+
+deriving via UnjsonPrettyParsec Extension instance Unjson Extension
+
+deriving via UnjsonPrettyParsec Mixin instance Unjson Mixin
+
+deriving via UnjsonPrettyParsec UnqualComponentName instance Unjson UnqualComponentName
+
+deriving via UnjsonPrettyParsec ExecutableScope instance Unjson ExecutableScope
+
+deriving via UnjsonPrettyParsec ForeignLibType instance Unjson ForeignLibType
+
+deriving via UnjsonPrettyParsec ForeignLibOption instance Unjson ForeignLibOption
+
+deriving via UnjsonPrettyParsec LibVersionInfo instance Unjson LibVersionInfo
+
+deriving via UnjsonShowRead BenchmarkInterface instance Unjson BenchmarkInterface
+
+-- | FIXME
+deriving via UnjsonShowRead LibraryName instance Unjson LibraryName
+
+instance (Typeable v, Unjson v) => Unjson (PerCompilerFlavor v) where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson BuildInfo where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson ModuleReexport where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson Benchmark where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson TestSuite where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson ForeignLib where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson Library where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson SetupBuildInfo where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson SourceRepo where
+  unjsonDef = objectOf gfieldDef'
+
+deriving via UnjsonShowRead CabalSpecVersion instance Unjson CabalSpecVersion
+
+instance Unjson Executable where
+  unjsonDef = objectOf gfieldDef'
+
+instance Unjson PackageDescription where
+  unjsonDef = objectOf gfieldDef'
 
 instance Unjson URI where
   unjsonDef =
@@ -647,6 +664,9 @@ instance Unjson BS.ByteString where
 
 instance Unjson BL.ByteString where
   unjsonDef = invmap TL.encodeUtf8 TL.decodeUtf8 unjsonDef
+
+instance Unjson ShortText where
+  unjsonDef = invmap toShortText fromShortText unjsonDef
 
 type GFromToJSON a = (GFromJSON Zero a, GToJSON' Value Zero a)
 
@@ -676,6 +696,7 @@ unjsonGenericAeson docstring options =
 -- instance Thingy'
 
 newtype UnjsonEnumeration a = UnjsonEnumeration a
+  deriving (Eq, Generic)
 
 instance
   ( Eq a,
@@ -692,12 +713,26 @@ instance
         (T.pack $ gdatatypeName @a)
         [(T.pack $ gconName bs, bs) | bs <- genumFromTo gminBound gmaxBound]
 
-deriving via UnjsonEnumeration BuildStyle instance Unjson BuildStyle
-
-unjsonTotalMap :: (Eq k, Constructors k, GEnum StandardEnum (Rep k), GBounded (Rep k), Typeable k, Typeable a, Unjson a) => UnjsonDef (k -> a)
+unjsonTotalMap ::
+  ( Eq k,
+    Constructors k,
+    GEnum StandardEnum (Rep k),
+    GBounded (Rep k),
+    Typeable k,
+    Typeable a,
+    Unjson a
+  ) =>
+  UnjsonDef (k -> a)
 unjsonTotalMap = unjsonTotalMapBy unjsonDef
 
-unjsonTotalMapBy :: (Typeable a, Eq k, Typeable k, (Constructors k, GEnum StandardEnum (Rep k), GBounded (Rep k))) => UnjsonDef a -> UnjsonDef (k -> a)
+unjsonTotalMapBy ::
+  ( Typeable a,
+    Eq k,
+    Typeable k,
+    (Constructors k, GEnum StandardEnum (Rep k), GBounded (Rep k))
+  ) =>
+  UnjsonDef a ->
+  UnjsonDef (k -> a)
 unjsonTotalMapBy def =
   objectOf $ unsafeLookup <$> for allValues mkField
   where
@@ -717,21 +752,19 @@ unjsonTotalMapBy def =
 -- | This is encoded as a list of pairs
 mapOfBy ::
   forall k v.
-  (Ord k, Typeable k, Typeable v) =>
-  UnjsonDef k ->
-  UnjsonDef v ->
+  (Ord k, Typeable k, Unjson k, Typeable v, Unjson v) =>
   UnjsonDef (Map k v)
-mapOfBy uk uv =
+mapOfBy =
   invmap M.fromList M.toList $
-    arrayWithPrimaryKeyOf fst uk (unjsonTuple2By uk uv)
+    arrayWithPrimaryKeyOf fst unjsonDef unjsonDef -- (unjsonTuple2By uk uv)
 
--- | Workaround because TupleFieldDef is not exposed
-unjsonTuple2By :: UnjsonDef k -> UnjsonDef v -> UnjsonDef (k, v)
-unjsonTuple2By uk uv =
-  unjsonInvmapR
-    (\(vk, vv) -> (,) <$> parse uk vk <*> parse uv vv)
-    (bimap (unjsonToJSON uk) (unjsonToJSON uv))
-    unjsonDef
+-- -- | Workaround because TupleFieldDef is not exposed
+-- unjsonTuple2By :: UnjsonDef k -> UnjsonDef v -> UnjsonDef (k, v)
+-- unjsonTuple2By uk uv =
+--   unjsonInvmapR
+--     (\(vk, vv) -> (,) <$> parse uk vk <*> parse uv vv)
+--     (bimap (unjsonToJSON uk) (unjsonToJSON uv))
+--     unjsonDef
 
 main :: IO ()
 main = do
