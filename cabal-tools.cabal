@@ -26,7 +26,7 @@ executable cabal-install-plan
                     , network-uri
                     , zlib
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 executable cabal-project-config
     import:           warnings
@@ -44,7 +44,7 @@ executable cabal-project-config
                     , text
                     , unjson
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 executable cabal-builder
     import:           warnings
@@ -61,7 +61,7 @@ executable cabal-builder
                     , prettyprinter
                     , process
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 
 executable cabal-available-packages
@@ -78,7 +78,7 @@ executable cabal-available-packages
                     , pretty-simple
                     , text
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 executable cabal-gen-bounds
     import:           warnings
@@ -91,12 +91,11 @@ executable cabal-gen-bounds
                     , cabal-install-solver ^>= 3.10.0.0
                     , Cabal-syntax         ^>= 3.10.0.0
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 executable cabal-read-plan
     import:           warnings
     main-is:          ReadPlan.hs
-    other-modules:    ReadPlan.Tests
     build-depends:    base                  >= 4.14.3.0
                     , base16-bytestring
                     , binary
@@ -112,11 +111,12 @@ executable cabal-read-plan
                     , free
                     , generic-data
                     , generic-deriving
-                    , network-uri
                     , invariant
+                    , microlens
+                    , network-uri
                     , unjson
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 executable cabal-active-bounds
     import:           warnings
@@ -131,7 +131,7 @@ executable cabal-active-bounds
                     , cabal-install-solver ^>= 3.10.0.0
                     , Cabal-syntax         ^>= 3.10.0.0
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
 
 executable cabal-project-building
     import:           warnings
@@ -147,4 +147,4 @@ executable cabal-project-building
                     , cabal-install-solver ^>= 3.10.0.0
                     , Cabal-syntax         ^>= 3.10.0.0
     hs-source-dirs:   app
-    default-language: Haskell2010
+    default-language: GHC2021
