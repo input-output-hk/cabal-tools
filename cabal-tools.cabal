@@ -68,9 +68,9 @@ executable cabal-available-packages
   hs-source-dirs:   app
   default-language: Haskell2010
 
-executable cabal-show-install-plan
+executable cabal-make-install-plan
   import:           warnings
-  main-is:          ReadInstallPlan.hs
+  main-is:          MakeInstallPlan.hs
   build-depends:
     , base
     , binary
