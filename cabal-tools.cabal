@@ -29,25 +29,6 @@ library utils
   hs-source-dirs:   src
   default-language: Haskell2010
 
-executable cabal-show-project-config
-  import:           warnings
-  main-is:          ProjectConfig.hs
-  build-depends:
-    , aeson
-    , base
-    , binary
-    , bytestring
-    , Cabal
-    , cabal-install
-    , cabal-install-solver
-    , Cabal-syntax
-    , cabal-tools:utils
-    , optparse-applicative
-    , pretty-simple
-
-  hs-source-dirs:   app
-  default-language: Haskell2010
-
 executable cabal-available-packages
   import:           warnings
   main-is:          AvailablePackages.hs
@@ -79,47 +60,6 @@ executable cabal-make-install-plan
     , cabal-install
     , cabal-install-solver
     , Cabal-syntax
-    , cabal-tools:utils
-    , containers
-    , filepath
-    , optparse-applicative
-    , pretty-simple
-
-  hs-source-dirs:   app
-  default-language: Haskell2010
-
-executable cabal-show-solver-plan
-  import:           warnings
-  main-is:          ReadSolverPlan.hs
-  build-depends:
-    , base
-    , binary
-    , bytestring
-    , Cabal
-    , cabal-install
-    , cabal-install-solver
-    , Cabal-syntax
-    , cabal-tools:utils
-    , containers
-    , filepath
-    , optparse-applicative
-    , pretty-simple
-
-  hs-source-dirs:   app
-  default-language: Haskell2010
-
-executable cabal-write-plan-json
-  import:           warnings
-  main-is:          WritePlanJson.hs
-  build-depends:
-    , base
-    , binary
-    , bytestring
-    , Cabal
-    , cabal-install
-    , cabal-install-solver
-    , Cabal-syntax
-    , cabal-tools:utils
     , containers
     , filepath
     , optparse-applicative

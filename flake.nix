@@ -3,11 +3,12 @@
     flake-parts.url = "github:hercules-ci/flake-parts";
     haskell-nix.url = "github:input-output-hk/haskell.nix";
   };
-  outputs = inputs@{ flake-parts, haskell-nix, ... }:
+  outputs = inputs@{ self, flake-parts, haskell-nix, ... }:
     flake-parts.lib.mkFlake
       { inherit inputs; }
       {
         systems = [ "x86_64-linux" ];
+
         perSystem = { self', system, pkgs, ... }:
           let
             project = pkgs.haskell-nix.cabalProject' {
@@ -31,8 +32,12 @@
           in
           {
             _module.args.pkgs = haskell-nix.legacyPackages.${system};
-            inherit (flake) apps checks devShells packages;
+            inherit (flake) apps checks devShells;
+            packages = flake.packages //
+              project.hsPkgs.cabal-tools.components.exes;
           };
+
+        flake.hydraJobs.x86_64-linux = self.packages.x86_64-linux;
       };
 
   # --- Flake Local Nix Configuration ----------------------------
