@@ -114,6 +114,7 @@ executable cabal-read-plan
                     , invariant
                     , microlens
                     , network-uri
+                    , one-liner
                     , unjson
     hs-source-dirs:   app
     default-language: GHC2021

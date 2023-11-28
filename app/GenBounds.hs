@@ -4,9 +4,9 @@
 
 module Main where
 
-import qualified Data.Map.Strict as Map
+import Data.Map.Strict qualified as Map
 import Distribution.Client.Compat.Prelude
-import qualified Distribution.Client.InstallPlan as InstallPlan
+import Distribution.Client.InstallPlan qualified as InstallPlan
 import Distribution.Client.ProjectOrchestration
 import Distribution.Client.ProjectPlanning
 import Distribution.Client.Types.PackageLocation
@@ -16,71 +16,71 @@ import Distribution.PackageDescription
 import Distribution.PackageDescription.Configuration (transformAllBuildDepends)
 import Distribution.PackageDescription.PrettyPrint
 import Distribution.Solver.Types.SourcePackage
-import qualified Distribution.Verbosity as Verbosity
+import Distribution.Verbosity qualified as Verbosity
 import Distribution.Version hiding (hasLowerBound)
 import System.FilePath
 import Prelude ()
 
 main :: IO ()
 main = do
-  let verbosity = Verbosity.normal
+    let verbosity = Verbosity.normal
 
-  ProjectBaseContext
-    { distDirLayout,
-      cabalDirLayout,
-      projectConfig,
-      localPackages
-    } <-
-    establishProjectBaseContext verbosity mempty OtherCommand
+    ProjectBaseContext
+        { distDirLayout
+        , cabalDirLayout
+        , projectConfig
+        , localPackages
+        } <-
+        establishProjectBaseContext verbosity mempty OtherCommand
 
-  (_, elaboratedPlan, _, _, _) <-
-    rebuildInstallPlan
-      verbosity
-      distDirLayout
-      cabalDirLayout
-      projectConfig
-      localPackages
+    (_, elaboratedPlan, _, _, _) <-
+        rebuildInstallPlan
+            verbosity
+            distDirLayout
+            cabalDirLayout
+            projectConfig
+            localPackages
 
-  let versionsMap =
-        Map.fromList $
-          [ (packageName ipi, packageVersion ipi)
-            | InstallPlan.PreExisting ipi <- InstallPlan.toList elaboratedPlan
-          ]
-            ++ [ (packageName ecp, packageVersion ecp)
-                 | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan,
-                   not $ elabLocalToProject ecp
-               ]
+    let versionsMap =
+            Map.fromList
+                $ [ (packageName ipi, packageVersion ipi)
+                  | InstallPlan.PreExisting ipi <- InstallPlan.toList elaboratedPlan
+                  ]
+                ++ [ (packageName ecp, packageVersion ecp)
+                   | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan
+                   , not $ elabLocalToProject ecp
+                   ]
 
-  let improveDepedency dep@(Dependency pn vr nes) =
-        case Map.lookup pn versionsMap of
-          Nothing -> dep
-          Just v -> Dependency pn (improveVersionRange vr v) nes
+    let improveDepedency dep@(Dependency pn vr nes) =
+            case Map.lookup pn versionsMap of
+                Nothing -> dep
+                Just v -> Dependency pn (improveVersionRange vr v) nes
 
-  for_ localPackages $ \case
-    SpecificSourcePackage SourcePackage {srcpkgPackageId, srcpkgSource = LocalUnpackedPackage pkgPath, srcpkgDescription, srcpkgDescrOverride = Nothing} -> do
-      let PackageIdentifier {pkgName} = srcpkgPackageId
+    for_ localPackages $ \case
+        SpecificSourcePackage SourcePackage{srcpkgPackageId, srcpkgSource = LocalUnpackedPackage pkgPath, srcpkgDescription, srcpkgDescrOverride = Nothing} -> do
+            let PackageIdentifier{pkgName} = srcpkgPackageId
 
-      let fp = pkgPath </> unPackageName pkgName <.> "cabal.improved"
-      let srcpkgDescription' = transformAllBuildDepends improveDepedency srcpkgDescription
+            let fp = pkgPath </> unPackageName pkgName <.> "cabal.improved"
+            let srcpkgDescription' = transformAllBuildDepends improveDepedency srcpkgDescription
 
-      putStrLn $ "Writing " ++ fp
-      writeGenericPackageDescription fp srcpkgDescription'
-    anyOtherCase ->
-      putStrLn $ "Not handled: " ++ show anyOtherCase
+            putStrLn $ "Writing " ++ fp
+            writeGenericPackageDescription fp srcpkgDescription'
+        anyOtherCase ->
+            putStrLn $ "Not handled: " ++ show anyOtherCase
 
 improveVersionRange :: VersionRange -> Version -> VersionRange
 improveVersionRange vr v =
-  simplifyVersionRange . addMV v . addUB v . addLB v $ vr
+    simplifyVersionRange . addMV v . addUB v . addLB v $ vr
 
 addLB :: Version -> VersionRange -> VersionRange
 addLB v vr
-  | hasLowerBound vr = vr
-  | otherwise = intersectVersionRanges vr (laterVersion v)
+    | hasLowerBound vr = vr
+    | otherwise = intersectVersionRanges vr (laterVersion v)
 
 addUB :: Version -> VersionRange -> VersionRange
 addUB v vr
-  | hasUpperBound vr = vr
-  | otherwise = intersectVersionRanges vr (earlierVersion $ majorUpperBound v)
+    | hasUpperBound vr = vr
+    | otherwise = intersectVersionRanges vr (earlierVersion $ majorUpperBound v)
 
 addMV :: Version -> VersionRange -> VersionRange
 addMV v vr = unionVersionRanges vr (majorBoundVersion v)

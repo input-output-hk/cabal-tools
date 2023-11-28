@@ -42,8 +42,8 @@ printCommandHelp help = getProgName >>= putStr . help
 
 printErrors :: [String] -> IO ()
 printErrors errs = do
-  putStr (intercalate "\n" errs)
-  exitWith (ExitFailure 1)
+    putStr (intercalate "\n" errs)
+    exitWith (ExitFailure 1)
 
 printOptionsList :: [String] -> IO ()
 printOptionsList = putStr . unlines
@@ -52,168 +52,168 @@ printGlobalHelp :: (String -> String) -> IO ()
 printGlobalHelp = printCommandHelp
 
 newtype MakeNixPlanFlags = MakeNixPlanFlags
-  { repoPaths :: Map.Map RepoName FilePath
-  }
-  deriving (Show)
+    { repoPaths :: Map.Map RepoName FilePath
+    }
+    deriving (Show)
 
 defaultMakeNixPlanFlags :: MakeNixPlanFlags
-defaultMakeNixPlanFlags = MakeNixPlanFlags {repoPaths = mempty}
+defaultMakeNixPlanFlags = MakeNixPlanFlags{repoPaths = mempty}
 
 main :: IO ()
 main = do
-  args <- getArgs
+    args <- getArgs
 
-  let commands = [commandAddAction cmdMakeNixPlanUI cmdMakeNixPlanAction]
+    let commands = [commandAddAction cmdMakeNixPlanUI cmdMakeNixPlanAction]
 
-  case commandsRun (globalCommand commands) commands args of
-    CommandHelp help -> printGlobalHelp help
-    CommandList opts -> printOptionsList opts
-    CommandErrors errs -> printErrors errs
-    CommandReadyToGo (globalFlags, commandParse) ->
-      case commandParse of
-        CommandHelp help -> printCommandHelp help
+    case commandsRun (globalCommand commands) commands args of
+        CommandHelp help -> printGlobalHelp help
         CommandList opts -> printOptionsList opts
         CommandErrors errs -> printErrors errs
-        CommandReadyToGo action -> do
-          action globalFlags
+        CommandReadyToGo (globalFlags, commandParse) ->
+            case commandParse of
+                CommandHelp help -> printCommandHelp help
+                CommandList opts -> printOptionsList opts
+                CommandErrors errs -> printErrors errs
+                CommandReadyToGo action -> do
+                    action globalFlags
 
 cmdMakeNixPlanUI :: CommandUI (NixStyleFlags MakeNixPlanFlags)
 cmdMakeNixPlanUI =
-  CommandUI
-    { commandName = "make-nix-install-plan",
-      commandSynopsis = "Makes an install-plan",
-      commandUsage = ("Usage: " ++),
-      commandDescription = Nothing,
-      commandNotes = Nothing,
-      commandDefaultFlags = defaultNixStyleFlags defaultMakeNixPlanFlags,
-      commandOptions =
-        nixStyleOptions
-          ( const
-              [ option
-                  []
-                  ["remote-repo-path"]
-                  "Set a path for a remote repository"
-                  repoPaths
-                  (\v flags -> flags {repoPaths = v})
-                  ( reqArg
-                      "REPO=PATH"
-                      ( parsecToReadE
-                          (const "expected an argument of the form repository-name=path")
-                          (fmap (uncurry Map.singleton) repoPathParser)
-                      )
-                      (map show . toList)
-                  )
-              ]
-          )
-    }
+    CommandUI
+        { commandName = "make-nix-install-plan"
+        , commandSynopsis = "Makes an install-plan"
+        , commandUsage = ("Usage: " ++)
+        , commandDescription = Nothing
+        , commandNotes = Nothing
+        , commandDefaultFlags = defaultNixStyleFlags defaultMakeNixPlanFlags
+        , commandOptions =
+            nixStyleOptions
+                ( const
+                    [ option
+                        []
+                        ["remote-repo-path"]
+                        "Set a path for a remote repository"
+                        repoPaths
+                        (\v flags -> flags{repoPaths = v})
+                        ( reqArg
+                            "REPO=PATH"
+                            ( parsecToReadE
+                                (const "expected an argument of the form repository-name=path")
+                                (fmap (uncurry Map.singleton) repoPathParser)
+                            )
+                            (map show . toList)
+                        )
+                    ]
+                )
+        }
   where
     repoPathParser :: ParsecParser (RepoName, FilePath)
     repoPathParser =
-      (,) <$> parsec <* P.char ':' <*> parsecFilePath
+        (,) <$> parsec <* P.char ':' <*> parsecFilePath
 
 cmdMakeNixPlanAction :: NixStyleFlags MakeNixPlanFlags -> [String] -> GlobalFlags -> IO ()
 cmdMakeNixPlanAction nixStyleFlags _extraArgs globalFlags = do
-  let NixStyleFlags
-        { configFlags = ConfigFlags {configVerbosity},
-          extraFlags = MakeNixPlanFlags {repoPaths}
-        } = nixStyleFlags
+    let NixStyleFlags
+            { configFlags = ConfigFlags{configVerbosity}
+            , extraFlags = MakeNixPlanFlags{repoPaths}
+            } = nixStyleFlags
 
-  let cliConfig = commandLineFlagsToProjectConfig globalFlags nixStyleFlags mempty
-  let verbosity = fromFlagOrDefault Verbosity.normal configVerbosity
+    let cliConfig = commandLineFlagsToProjectConfig globalFlags nixStyleFlags mempty
+    let verbosity = fromFlagOrDefault Verbosity.normal configVerbosity
 
-  ProjectBaseContext {distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
-    establishProjectBaseContext verbosity cliConfig OtherCommand
+    ProjectBaseContext{distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
+        establishProjectBaseContext verbosity cliConfig OtherCommand
 
-  repareRemoteRepositories verbosity (projectConfigBuildOnly projectConfig) (projectConfigShared projectConfig) repoPaths
+    repareRemoteRepositories verbosity (projectConfigBuildOnly projectConfig) (projectConfigShared projectConfig) repoPaths
 
-  (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
-    rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
+    (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
+        rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
 
-  let nixPlanPath = distProjectCacheFile distDirLayout "nix"
-  writeHaskellNixPlan verbosity (nixPlanPath </> "plan.nix") elaboratedPlan elaboratedSharedConfig totalIndexState activeRepos
+    let nixPlanPath = distProjectCacheFile distDirLayout "nix"
+    writeHaskellNixPlan verbosity (nixPlanPath </> "plan.nix") elaboratedPlan elaboratedSharedConfig totalIndexState activeRepos
 
 repareRemoteRepositories :: Verbosity -> ProjectConfigBuildOnly -> ProjectConfigShared -> Map.Map RepoName FilePath -> IO ()
 repareRemoteRepositories
-  verbosity
-  ProjectConfigBuildOnly {projectConfigCacheDir}
-  ProjectConfigShared {projectConfigRemoteRepos}
-  repoPaths = do
-    -- AFAIU the code, this flag is always set (because it is set in the initial config)
-    -- note this can be overridden with --remote-repo-cache
-    let sharedCacheDir = fromFlagOrDefault (error "unknown projectConfigCacheDir") projectConfigCacheDir
+    verbosity
+    ProjectConfigBuildOnly{projectConfigCacheDir}
+    ProjectConfigShared{projectConfigRemoteRepos}
+    repoPaths = do
+        -- AFAIU the code, this flag is always set (because it is set in the initial config)
+        -- note this can be overridden with --remote-repo-cache
+        let sharedCacheDir = fromFlagOrDefault (error "unknown projectConfigCacheDir") projectConfigCacheDir
 
-    sharedCacheDirExists <- doesDirectoryExist sharedCacheDir
-    when sharedCacheDirExists $ do
-      isEmpty <- null <$> listDirectory sharedCacheDir
-      unless isEmpty $ do
-        notice verbosity $
-          unwords
-            [ "Directory " <> sharedCacheDir <> " already exists and is not empty. I refuse to mess it up.",
-              "You can use the --remote-repo-cache global flag to use another directory."
-            ]
-        exitFailure
+        sharedCacheDirExists <- doesDirectoryExist sharedCacheDir
+        when sharedCacheDirExists $ do
+            isEmpty <- null <$> listDirectory sharedCacheDir
+            unless isEmpty $ do
+                notice verbosity $
+                    unwords
+                        [ "Directory " <> sharedCacheDir <> " already exists and is not empty. I refuse to mess it up."
+                        , "You can use the --remote-repo-cache global flag to use another directory."
+                        ]
+                exitFailure
 
-    for_ (fromNubList projectConfigRemoteRepos) $ \case
-      RemoteRepo {remoteRepoName, remoteRepoSecure = Just True} -> do
-        case Map.lookup remoteRepoName repoPaths of
-          Nothing -> do
-            notice verbosity $
-              "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we do not have a path."
-            exitFailure
-          Just path -> do
-            info verbosity $
-              "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we have a path."
-            let repoLocalDir = sharedCacheDir </> unRepoName remoteRepoName
-            cacheSecureRepo verbosity path repoLocalDir
-      _otherwise -> do
-        notice verbosity $ unwords ["Only secure repositories are supported"]
-        exitFailure
+        for_ (fromNubList projectConfigRemoteRepos) $ \case
+            RemoteRepo{remoteRepoName, remoteRepoSecure = Just True} -> do
+                case Map.lookup remoteRepoName repoPaths of
+                    Nothing -> do
+                        notice verbosity $
+                            "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we do not have a path."
+                        exitFailure
+                    Just path -> do
+                        info verbosity $
+                            "Project uses a repository named " <> prettyShow remoteRepoName <> " for which we have a path."
+                        let repoLocalDir = sharedCacheDir </> unRepoName remoteRepoName
+                        cacheSecureRepo verbosity path repoLocalDir
+            _otherwise -> do
+                notice verbosity $ unwords ["Only secure repositories are supported"]
+                exitFailure
 
 cacheSecureRepo :: Verbosity -> FilePath -> FilePath -> IO ()
 cacheSecureRepo verbosity path repoLocalDir = do
-  createDirectoryIfMissingVerbose verbosity False repoLocalDir
+    createDirectoryIfMissingVerbose verbosity False repoLocalDir
 
-  cachePath <- Sec.makeAbsolute $ Sec.fromFilePath repoLocalDir
-  let cache = Sec.Cache cachePath cacheLayout
+    cachePath <- Sec.makeAbsolute $ Sec.fromFilePath repoLocalDir
+    let cache = Sec.Cache cachePath cacheLayout
 
-  timestampJson <- mkLinkedLocalFile (path </> "timestamp.json")
-  Sec.cacheRemoteFile cache timestampJson Sec.FUn (Sec.CacheAs Sec.CachedTimestamp)
+    timestampJson <- mkLinkedLocalFile (path </> "timestamp.json")
+    Sec.cacheRemoteFile cache timestampJson Sec.FUn (Sec.CacheAs Sec.CachedTimestamp)
 
-  rootJson <- mkLinkedLocalFile (path </> "root.json")
-  Sec.cacheRemoteFile cache rootJson Sec.FUn (Sec.CacheAs Sec.CachedRoot)
+    rootJson <- mkLinkedLocalFile (path </> "root.json")
+    Sec.cacheRemoteFile cache rootJson Sec.FUn (Sec.CacheAs Sec.CachedRoot)
 
-  snapshotJson <- mkLinkedLocalFile (path </> "snapshot.json")
-  Sec.cacheRemoteFile cache snapshotJson Sec.FUn (Sec.CacheAs Sec.CachedSnapshot)
+    snapshotJson <- mkLinkedLocalFile (path </> "snapshot.json")
+    Sec.cacheRemoteFile cache snapshotJson Sec.FUn (Sec.CacheAs Sec.CachedSnapshot)
 
-  mirrorsJson <- mkLinkedLocalFile (path </> "mirrors.json")
-  Sec.cacheRemoteFile cache mirrorsJson Sec.FUn (Sec.CacheAs Sec.CachedMirrors)
+    mirrorsJson <- mkLinkedLocalFile (path </> "mirrors.json")
+    Sec.cacheRemoteFile cache mirrorsJson Sec.FUn (Sec.CacheAs Sec.CachedMirrors)
 
-  -- cacheRemoteFile triggers the creation of 01-index.tar.idx which we
-  -- cannot create in any other way.
-  indexTarGz <- mkLinkedLocalFile (path </> "01-index.tar.gz")
-  Sec.cacheRemoteFile cache indexTarGz Sec.FGz Sec.CacheIndex
+    -- cacheRemoteFile triggers the creation of 01-index.tar.idx which we
+    -- cannot create in any other way.
+    indexTarGz <- mkLinkedLocalFile (path </> "01-index.tar.gz")
+    Sec.cacheRemoteFile cache indexTarGz Sec.FGz Sec.CacheIndex
   where
     cacheLayout =
-      Sec.cabalCacheLayout
-        { Sec.cacheLayoutIndexTar = cacheFn "01-index.tar",
-          Sec.cacheLayoutIndexIdx = cacheFn "01-index.tar.idx",
-          Sec.cacheLayoutIndexTarGz = cacheFn "01-index.tar.gz"
-        }
+        Sec.cabalCacheLayout
+            { Sec.cacheLayoutIndexTar = cacheFn "01-index.tar"
+            , Sec.cacheLayoutIndexIdx = cacheFn "01-index.tar.idx"
+            , Sec.cacheLayoutIndexTarGz = cacheFn "01-index.tar.gz"
+            }
     cacheFn = Sec.rootPath . Sec.fragment
 
 writeHaskellNixPlan :: Verbosity -> FilePath -> ElaboratedInstallPlan -> ElaboratedSharedConfig -> TotalIndexState -> ActiveRepos -> IO ()
 writeHaskellNixPlan verbosity outputDir elaboratedPlan _elaboratedSharedConfig _totalIndexState _activeRepos = do
-  createDirectoryIfMissing True outputDir
-  let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
-  for_ ecps $
-    \ElaboratedConfiguredPackage
-       { elabPkgSourceId,
-         elabPkgDescriptionOverride
-       } -> do
-        let pkgFile = outputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
-        for_ elabPkgDescriptionOverride $ \pkgTxt -> do
-          info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
-          BSL.writeFile pkgFile pkgTxt
+    createDirectoryIfMissing True outputDir
+    let ecps = [ecp | InstallPlan.Configured ecp <- InstallPlan.toList elaboratedPlan, not $ elabLocalToProject ecp]
+    for_ ecps $
+        \ElaboratedConfiguredPackage
+            { elabPkgSourceId
+            , elabPkgDescriptionOverride
+            } -> do
+                let pkgFile = outputDir </> prettyShow (pkgName elabPkgSourceId) <.> "cabal"
+                for_ elabPkgDescriptionOverride $ \pkgTxt -> do
+                    info verbosity $ "Writing package description for " ++ prettyShow elabPkgSourceId ++ " to " ++ pkgFile
+                    BSL.writeFile pkgFile pkgTxt
 
 --
 -- LinkedLocalFile
@@ -227,13 +227,13 @@ mkLinkedLocalFile fp = LinkedLocalFile <$> Sec.makeAbsolute (Sec.fromFilePath fp
 newtype LinkedLocalFile a = LinkedLocalFile (Sec.Path Sec.Absolute)
 
 instance DownloadedFile LinkedLocalFile where
-  downloadedVerify (LinkedLocalFile _fp) _trustedInfo =
-    return True
+    downloadedVerify (LinkedLocalFile _fp) _trustedInfo =
+        return True
 
-  downloadedCopyTo (LinkedLocalFile local) dst = do
-    srcA <- Sec.toAbsoluteFilePath local
-    dstA <- Sec.toAbsoluteFilePath dst
-    createFileLink srcA dstA
+    downloadedCopyTo (LinkedLocalFile local) dst = do
+        srcA <- Sec.toAbsoluteFilePath local
+        dstA <- Sec.toAbsoluteFilePath dst
+        createFileLink srcA dstA
 
-  downloadedRead (LinkedLocalFile local) =
-    Sec.readLazyByteString local
+    downloadedRead (LinkedLocalFile local) =
+        Sec.readLazyByteString local
