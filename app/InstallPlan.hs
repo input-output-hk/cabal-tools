@@ -121,13 +121,13 @@ cmdMakeNixPlanAction nixStyleFlags _extraArgs globalFlags = do
     let cliConfig = commandLineFlagsToProjectConfig globalFlags nixStyleFlags mempty
     let verbosity = fromFlagOrDefault Verbosity.normal configVerbosity
 
-    ProjectBaseContext{distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
+    ProjectBaseContext{distDirLayout, cabalDirLayout, projectConfig, localPackages, installedPackages} <-
         establishProjectBaseContext verbosity cliConfig OtherCommand
 
     repareRemoteRepositories verbosity (projectConfigBuildOnly projectConfig) (projectConfigShared projectConfig) repoPaths
 
     (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
-        rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages
+        rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages installedPackages
 
     let nixPlanPath = distProjectCacheFile distDirLayout "nix"
     writeHaskellNixPlan verbosity (nixPlanPath </> "plan.nix") elaboratedPlan elaboratedSharedConfig totalIndexState activeRepos

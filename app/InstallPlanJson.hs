@@ -12,7 +12,7 @@
 {-# OPTIONS_GHC -Wno-unused-imports #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
-module ReadPlan (main) where
+module Main (main) where
 
 import Control.Applicative ((<|>))
 import Control.Applicative.Free (Ap, hoistAp)
@@ -50,6 +50,7 @@ import Data.Tuple (swap)
 import Data.Typeable (Typeable)
 import Data.Unjson (
     FieldDef (..),
+    Options (..),
     Result,
     Unjson (..),
     UnjsonDef (SimpleUnjsonDef),
@@ -65,28 +66,93 @@ import Data.Unjson (
     render,
     unjsonAesonWithDoc,
     unjsonInvmapR,
+    unjsonToByteStringLazy',
     unjsonToJSON,
  )
+
 import Distribution.Backpack (OpenModule, OpenUnitId)
 import Distribution.Backpack.ConfiguredComponent ()
 import Distribution.Backpack.ModuleShape (ModuleShape (..))
 import Distribution.CabalSpecVersion (CabalSpecVersion)
-import Distribution.Client.FileMonitor (MonitorStateFileSet)
-import Distribution.Client.HashValue (HashValue, showHashValue)
-import Distribution.Client.IndexUtils (
-    ActiveRepos,
-    TotalIndexState,
+import Distribution.Compat.Newtype ()
+import Distribution.License qualified
+import Distribution.ModuleName (ModuleName)
+import Distribution.PackageDescription
+import Distribution.Parsec (
+    Parsec (..),
+    eitherParsec,
+    explicitEitherParsec,
  )
-import Distribution.Client.InstallPlan (toList)
+import Distribution.Pretty (Pretty, prettyShow)
+import Distribution.SPDX.License qualified
+import Distribution.Types.ComponentName (ComponentName)
+import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec (..))
+import Distribution.Types.Flag (FlagAssignment)
+import Distribution.Types.PackageDescription (PackageDescription)
+import Distribution.Types.PkgconfigVersion (PkgconfigVersion (..))
+import Distribution.Types.SourceRepo (RepoType, SourceRepo)
+import Distribution.Utils.Path
+import Distribution.Utils.ShortText (ShortText, fromShortText, toShortText)
+import Distribution.Utils.Structured (Structured, Tag)
+import Distribution.Verbosity (Verbosity)
+import Distribution.Verbosity qualified as Verbosity
+
+import Distribution.Simple (
+    AbiHash,
+    CompilerFlavor,
+    ComponentId,
+    DebugInfoLevel,
+    Language,
+    Module,
+    OptimisationLevel,
+    PackageDB,
+    PackageId,
+    PackageName,
+    PerCompilerFlavor,
+    PkgconfigName,
+    ProfDetailLevel,
+    UnitId,
+    Version,
+    VersionRange,
+ )
+import Distribution.Simple.Command (CommandParse (..), CommandUI (..), commandParseArgs)
+import Distribution.Simple.Compiler (PackageDB)
+import Distribution.Simple.InstallDirs (
+    InstallDirs,
+    PathTemplate,
+    fromPathTemplate,
+    toPathTemplate,
+ )
+import Distribution.Simple.Setup (
+    ConfigFlags (..),
+    DumpBuildInfo,
+    HaddockTarget,
+    TestShowDetails,
+    fromFlagOrDefault,
+    readPackageDb,
+    readPackageDbList,
+    showPackageDb,
+    showPackageDbList,
+ )
+
+import Distribution.Client.FileMonitor (MonitorStateFileSet)
+import Distribution.Client.GlobalFlags
+import Distribution.Client.HashValue (HashValue, showHashValue)
+import Distribution.Client.IndexUtils (ActiveRepos, RepoIndexState, TotalIndexState)
+import Distribution.Client.InstallPlan (GenericPlanPackage (..), toList)
+import Distribution.Client.NixStyleOptions (NixStyleFlags (..), defaultNixStyleFlags, nixStyleOptions)
 import Distribution.Client.PackageHash ()
-import Distribution.Client.ProjectConfig (ProjectConfig)
+import Distribution.Client.ProjectConfig (MapMappend (..), ProjectConfig, commandLineFlagsToProjectConfig)
+import Distribution.Client.ProjectOrchestration (CurrentCommand (..), ProjectBaseContext (..), establishProjectBaseContext)
 import Distribution.Client.ProjectPlanning (
     BuildStyle,
     ComponentTarget (..),
     ElaboratedConfiguredPackage (..),
     ElaboratedInstallPlan,
+    ElaboratedPlanPackage,
     ElaboratedSharedConfig,
     SubComponentTarget (WholeComponent),
+    rebuildInstallPlan,
  )
 import Distribution.Client.ProjectPlanning.Types (
     ElaboratedComponent (..),
@@ -106,50 +172,7 @@ import Distribution.Client.Types (
 import Distribution.Client.Types.SourceRepo (
     SourceRepositoryPackage (..),
  )
-import Distribution.Compat.Newtype ()
-import Distribution.License qualified
-import Distribution.ModuleName (ModuleName)
-import Distribution.PackageDescription
-import Distribution.Parsec (
-    Parsec (..),
-    eitherParsec,
-    explicitEitherParsec,
- )
-import Distribution.Pretty (Pretty, prettyShow)
-import Distribution.SPDX.License qualified
-import Distribution.Simple (
-    CompilerFlavor,
-    ComponentId,
-    DebugInfoLevel,
-    Language,
-    Module,
-    OptimisationLevel,
-    PackageDB,
-    PackageId,
-    PackageName,
-    PerCompilerFlavor,
-    PkgconfigName,
-    ProfDetailLevel,
-    UnitId,
-    Version,
-    VersionRange,
- )
-import Distribution.Simple.Compiler (PackageDB)
-import Distribution.Simple.InstallDirs (
-    InstallDirs,
-    PathTemplate,
-    fromPathTemplate,
-    toPathTemplate,
- )
-import Distribution.Simple.Setup (
-    DumpBuildInfo,
-    HaddockTarget,
-    TestShowDetails,
-    readPackageDb,
-    readPackageDbList,
-    showPackageDb,
-    showPackageDbList,
- )
+
 import Distribution.Solver.Types.ComponentDeps qualified as CD
 import Distribution.Solver.Types.OptionalStanza (
     OptionalStanza (..),
@@ -160,15 +183,7 @@ import Distribution.Solver.Types.OptionalStanza (
     optStanzaSetToList,
     optStanzaTabulate,
  )
-import Distribution.Types.ComponentName (ComponentName)
-import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec (..))
-import Distribution.Types.Flag (FlagAssignment)
-import Distribution.Types.PackageDescription (PackageDescription)
-import Distribution.Types.PkgconfigVersion (PkgconfigVersion (..))
-import Distribution.Types.SourceRepo (RepoType, SourceRepo)
-import Distribution.Utils.Path
-import Distribution.Utils.ShortText (ShortText, fromShortText, toShortText)
-import Distribution.Utils.Structured (Structured, Tag)
+
 import GHC.Generics (
     C1,
     Constructor (..),
@@ -200,15 +215,15 @@ import Generic.Data (
     gminBound,
  )
 import Generic.Data.Internal.Meta (GDatatype (..))
-import Generics.OneLiner
 import Language.Haskell.Extension
 import Network.URI (URI, parseURI)
+import System.Environment
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import Text.Read (readMaybe)
 
--- class (Typeable a, Unjson a) => MyConstraints a
--- x :: forall r. (ADTRecord r, Constraints r MyConstraints, Generic r) => Ap (FieldDef r) r
--- x = createA' @MyConstraints (field "unnamed" (_ :: r -> f) "undocumented" :: forall f. MyConstraints f => Ap (FieldDef r) f)
+import Distribution.Client.Types.RepoName
+import Distribution.Types.InstalledPackageInfo
+import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
 
 -- Note: contramapFieldDef and contramapTupleFieldDef are basically
 -- Contravariant, but due to type parameters in wrong order we would
@@ -219,16 +234,6 @@ contramapFieldDef f (FieldReqDef name doc ext d) = FieldReqDef name doc (ext . f
 contramapFieldDef f (FieldOptDef name doc ext d) = FieldOptDef name doc (ext . f) d
 contramapFieldDef f (FieldDefDef name doc def ext d) = FieldDefDef name doc def (ext . f) d
 contramapFieldDef f (FieldRODef name doc ext d) = FieldRODef name doc (ext . f) d
-
--- data    V1        p                       -- lifted version of Empty
--- data    U1        p = U1                  -- lifted version of ()
--- data    (:+:) f g p = L1 (f p) | R1 (g p) -- lifted version of Either
--- data    (:*:) f g p = (f p) :*: (g p)     -- lifted version of (,)
--- newtype K1    i c p = K1 { unK1 :: c }    -- a container for a c
--- newtype M1  i t f p = M1 { unM1 :: f p }  -- a wrapper
-
--- instance (FieldDef' a) => Unjson a where
---   unjsonDef = objectOf fieldDef'
 
 class FieldDef' a where
     fieldDef' :: Ap (FieldDef a) a
@@ -268,28 +273,246 @@ instance (GFieldDef' l, GFieldDef' r) => GFieldDef' (l :*: r) where
         fst' (f :*: _) = f
         snd' (_ :*: g) = g
 
-instance FieldDef' PackageId
+newtype UnjsonObject a = UnjsonObject a
 
-instance Unjson ElaboratedConfiguredPackage where
-    unjsonDef = objectOf gfieldDef'
+instance (Generic a, GFieldDef' (Rep a)) => Unjson (UnjsonObject a) where
+    unjsonDef = invmap coerce coerce $ objectOf $ gfieldDef' @a
 
-instance (Typeable a, Unjson a) => Unjson (InstallDirs a) where
-    unjsonDef = objectOf gfieldDef'
+--
+-- Enumeration
+--
 
-deriving via UnjsonEnumeration DumpBuildInfo instance Unjson DumpBuildInfo
+newtype UnjsonEnumeration a = UnjsonEnumeration a
+    deriving (Eq, Generic)
 
+instance
+    ( Eq a
+    , Constructors a
+    , GEnum StandardEnum (Rep a)
+    , GBounded (Rep a)
+    , GDatatype (Rep a)
+    )
+    => Unjson (UnjsonEnumeration a)
+    where
+    unjsonDef =
+        invmap coerce coerce $
+            enumOf @a
+                (T.pack $ gdatatypeName @a)
+                [(T.pack $ gconName bs, bs) | bs <- genumFromTo gminBound gmaxBound]
+
+--
+-- PrettyParsec
+--
+
+newtype UnjsonPrettyParsec a = UnjsonPrettyParsec a
+
+deriving via (a :: Type) instance Pretty a => Pretty (UnjsonPrettyParsec a)
+
+-- | NOTE: This does not work
+-- deriving via a instance (Parsec a) => Parsec (UnjsonPrettyParsec a)
+instance Parsec a => Parsec (UnjsonPrettyParsec a) where
+    parsec = UnjsonPrettyParsec <$> parsec
+
+instance (Pretty a, Parsec a) => Unjson (UnjsonPrettyParsec a) where
+    unjsonDef = unjsonInvmapR (either fail return . eitherParsec) prettyShow unjsonDef
+
+--
+-- ShowRead
+--
+
+newtype UnjsonShowRead a = UnjsonShowRead a
+
+deriving via (a :: Type) instance Show a => Show (UnjsonShowRead a)
+
+deriving via (a :: Type) instance Read a => Read (UnjsonShowRead a)
+
+instance (Show a, Read a) => Unjson (UnjsonShowRead a) where
+    unjsonDef = unjsonInvmapR (maybe (fail "cannot parse") return . readMaybe) show unjsonDef
+
+--
+-- Aeson
+--
+
+newtype UnjsonGenericAeson a = UnjsonGenericAeson a
+
+instance (Generic a, GFromJSON Zero (Rep a), GToJSON' Value Zero (Rep a)) => Unjson (UnjsonGenericAeson a) where
+    unjsonDef = invmap coerce coerce $ unjsonGenericAeson @a "" Aeson.defaultOptions
+
+--
+-- Ad hoc types
+--
+
+unjsonTotalMap
+    :: ( Eq k
+       , Constructors k
+       , GEnum StandardEnum (Rep k)
+       , GBounded (Rep k)
+       , Typeable k
+       , Typeable a
+       , Unjson a
+       )
+    => UnjsonDef (k -> a)
+unjsonTotalMap = unjsonTotalMapBy unjsonDef
+
+unjsonTotalMapBy
+    :: ( Typeable a
+       , Eq k
+       , Typeable k
+       , (Constructors k, GEnum StandardEnum (Rep k), GBounded (Rep k))
+       )
+    => UnjsonDef a
+    -> UnjsonDef (k -> a)
+unjsonTotalMapBy def =
+    objectOf $ unsafeLookup <$> for allValues mkField
+  where
+    unsafeLookup l v =
+        fromJust (error "this should have never happened of course") $
+            Prelude.lookup v l
+
+    mkField v =
+        fieldBy
+            (T.pack $ gconName v)
+            (\f -> (v, f v))
+            (T.pack $ gconName v)
+            (invmap (v,) snd def)
+
+    allValues = genumFromTo gminBound gmaxBound
+
+-- | This is encoded as a list of pairs
+mapOfBy
+    :: forall k v
+     . (Ord k, Typeable k, Unjson k, Typeable v, Unjson v)
+    => UnjsonDef (Map k v)
+mapOfBy =
+    invmap M.fromList M.toList $
+        arrayWithPrimaryKeyOf fst unjsonDef unjsonDef -- (unjsonTuple2By uk uv)
+
+--
+-- Instances
+--
+
+deriving via UnjsonEnumeration BuildStyle instance Unjson BuildStyle
 deriving via UnjsonEnumeration DebugInfoLevel instance Unjson DebugInfoLevel
-
+deriving via UnjsonEnumeration DumpBuildInfo instance Unjson DumpBuildInfo
+deriving via UnjsonEnumeration LibraryVisibility instance Unjson LibraryVisibility
+deriving via UnjsonEnumeration OptimisationLevel instance Unjson OptimisationLevel
+deriving via UnjsonEnumeration OptionalStanza instance Unjson OptionalStanza
 deriving via UnjsonEnumeration SetupScriptStyle instance Unjson SetupScriptStyle
+deriving via UnjsonObject (InstallDirs a) instance (Unjson a, Typeable a) => Unjson (InstallDirs a)
+deriving via UnjsonObject (SourceRepositoryPackage Maybe) instance Unjson (SourceRepositoryPackage Maybe)
+deriving via UnjsonObject (SourceRepositoryPackage []) instance Unjson (SourceRepositoryPackage [])
+deriving via UnjsonObject Benchmark instance Unjson Benchmark
+deriving via UnjsonObject BuildInfo instance Unjson BuildInfo
+deriving via UnjsonObject ConfiguredId instance Unjson ConfiguredId
+deriving via UnjsonObject ElaboratedComponent instance Unjson ElaboratedComponent
+deriving via UnjsonObject ElaboratedConfiguredPackage instance Unjson ElaboratedConfiguredPackage
+deriving via UnjsonObject ElaboratedPackage instance Unjson ElaboratedPackage
+deriving via UnjsonObject Executable instance Unjson Executable
+deriving via UnjsonObject ForeignLib instance Unjson ForeignLib
+deriving via UnjsonObject InstalledPackageInfo instance Unjson InstalledPackageInfo
+deriving via UnjsonObject Library instance Unjson Library
+deriving via UnjsonObject ModuleReexport instance Unjson ModuleReexport
+deriving via UnjsonObject ModuleShape instance Unjson ModuleShape
+deriving via UnjsonObject PackageDescription instance Unjson PackageDescription
+deriving via UnjsonObject SetupBuildInfo instance Unjson SetupBuildInfo
+deriving via UnjsonObject SourceRepo instance Unjson SourceRepo
+deriving via UnjsonObject TestSuite instance Unjson TestSuite
+deriving via UnjsonObject TotalIndexState instance Unjson TotalIndexState
+deriving via UnjsonPrettyParsec ActiveRepos instance Unjson ActiveRepos
 
-instance Unjson ModuleShape where
+-- deriving via UnjsonObject ProjectConfig instance Unjson ProjectConfig
+
+deriving via UnjsonPrettyParsec (SymbolicPath a b) instance Unjson (SymbolicPath a b)
+deriving via UnjsonPrettyParsec AbiDependency instance Unjson AbiDependency
+deriving via UnjsonPrettyParsec AbiHash instance Unjson AbiHash
+deriving via UnjsonPrettyParsec BuildType instance Unjson BuildType
+deriving via UnjsonPrettyParsec CompilerFlavor instance Unjson CompilerFlavor
+deriving via UnjsonPrettyParsec ComponentId instance Unjson ComponentId
+deriving via UnjsonPrettyParsec ComponentName instance Unjson ComponentName
+deriving via UnjsonPrettyParsec Dependency instance Unjson Dependency
+deriving via UnjsonPrettyParsec Distribution.SPDX.License.License instance Unjson Distribution.SPDX.License.License
+deriving via UnjsonPrettyParsec ExeDependency instance Unjson ExeDependency
+deriving via UnjsonPrettyParsec ExecutableScope instance Unjson ExecutableScope
+deriving via UnjsonPrettyParsec ExposedModule instance Unjson ExposedModule
+deriving via UnjsonPrettyParsec Extension instance Unjson Extension
+deriving via UnjsonPrettyParsec FlagAssignment instance Unjson FlagAssignment
+deriving via UnjsonPrettyParsec ForeignLibOption instance Unjson ForeignLibOption
+deriving via UnjsonPrettyParsec ForeignLibType instance Unjson ForeignLibType
+deriving via UnjsonPrettyParsec HaddockTarget instance Unjson HaddockTarget
+deriving via UnjsonPrettyParsec Language instance Unjson Language
+deriving via UnjsonPrettyParsec LegacyExeDependency instance Unjson LegacyExeDependency
+deriving via UnjsonPrettyParsec LibVersionInfo instance Unjson LibVersionInfo
+deriving via UnjsonPrettyParsec LocalRepo instance Unjson LocalRepo
+deriving via UnjsonPrettyParsec Mixin instance Unjson Mixin
+deriving via UnjsonPrettyParsec Module instance Unjson Module
+deriving via UnjsonPrettyParsec ModuleName instance Unjson ModuleName
+deriving via UnjsonPrettyParsec OpenModule instance Unjson OpenModule
+deriving via UnjsonPrettyParsec OpenUnitId instance Unjson OpenUnitId
+deriving via UnjsonPrettyParsec PackageId instance Unjson PackageId
+deriving via UnjsonPrettyParsec PackageName instance Unjson PackageName
+deriving via UnjsonPrettyParsec PkgconfigDependency instance Unjson PkgconfigDependency
+deriving via UnjsonPrettyParsec PkgconfigName instance Unjson PkgconfigName
+deriving via UnjsonPrettyParsec PkgconfigVersion instance Unjson PkgconfigVersion
+deriving via UnjsonPrettyParsec RemoteRepo instance Unjson RemoteRepo
+deriving via UnjsonPrettyParsec RepoName instance Unjson RepoName
+deriving via UnjsonPrettyParsec RepoIndexState instance Unjson RepoIndexState
+deriving via UnjsonPrettyParsec RepoKind instance Unjson RepoKind
+deriving via UnjsonPrettyParsec RepoType instance Unjson RepoType
+deriving via UnjsonPrettyParsec TestShowDetails instance Unjson TestShowDetails
+deriving via UnjsonPrettyParsec TestType instance Unjson TestType
+deriving via UnjsonPrettyParsec UnitId instance Unjson UnitId
+deriving via UnjsonPrettyParsec UnqualComponentName instance Unjson UnqualComponentName
+deriving via UnjsonPrettyParsec Version instance Unjson Version
+deriving via UnjsonPrettyParsec VersionRange instance Unjson VersionRange
+deriving via UnjsonShowRead (Maybe Bool) instance Unjson (Maybe Bool)
+deriving via UnjsonShowRead BenchmarkInterface instance Unjson BenchmarkInterface
+deriving via UnjsonShowRead CabalSpecVersion instance Unjson CabalSpecVersion
+deriving via UnjsonShowRead PackageDB instance Unjson PackageDB
+
+deriving via Map a b instance Unjson (Map a b) => Unjson (MapMappend a b)
+
+-- | FIXME
+deriving via UnjsonShowRead LibraryName instance Unjson LibraryName
+
+-- | FIXME
+deriving via UnjsonShowRead (Either Distribution.SPDX.License.License Distribution.License.License) instance Unjson (Either Distribution.SPDX.License.License Distribution.License.License)
+
+instance {-# INCOHERENT #-} Unjson (PkgconfigName, Maybe PkgconfigVersion) where
     unjsonDef = objectOf gfieldDef'
 
 instance (Typeable a, Unjson a) => Unjson (Map ModuleName a) where
     unjsonDef = mapOfBy
 
+instance (Typeable a, Unjson a) => Unjson (Map RepoName a) where
+    unjsonDef = mapOfBy
+
+instance (Typeable a, Unjson a) => Unjson (Map PackageName a) where
+    unjsonDef = mapOfBy
+
 instance Unjson (Maybe PackageDB) where
     unjsonDef = invmap readPackageDb showPackageDb unjsonDef
+
+deriving via UnjsonShowRead ComponentRequestedSpec instance Unjson ComponentRequestedSpec
+
+gConst :: (Generic a, Constructors b, Unjson a, Typeable a, Generic b) => String -> Text -> (a -> b) -> (s -> a) -> (Text, b -> Bool, Ap (FieldDef s) b)
+gConst name doc cons proj = (T.pack name, (== name) . gconName, cons <$> field (T.pack name) proj doc)
+
+-- instance Unjson ComponentRequestedSpec where
+--     unjsonDef =
+--         disjointUnionOf
+--             "ComponentRequestedSpec"
+--             [ gConst "ComponentRequestedSpec" "ComponentRequestedSpec" ComponentRequestedSpec (\case ~(ComponentRequestedSpec test bench) -> _)
+--             , gConst "OneComponentRequestedSpec" "OneComponentRequestedSpec" OneComponentRequestedSpec (\case ~(OneComponentRequestedSpec name) -> name)
+--             ]
+
+instance Unjson ElaboratedPlanPackage where
+    unjsonDef =
+        disjointUnionOf
+            "ElaboratedPlanPackage"
+            [ gConst "PreExisting" "PreExisting" PreExisting (\case ~(PreExisting ipkg) -> ipkg)
+            , gConst "Configured" "Configured" Configured (\case ~(Configured pkg) -> pkg)
+            , gConst "Installed" "Installed" Installed (\case ~(Installed pkg) -> pkg)
+            ]
 
 instance Unjson ElaboratedPackageOrComponent where
     unjsonDef =
@@ -311,12 +534,6 @@ instance Unjson ElaboratedPackageOrComponent where
       where
         projectElabPackage ~(ElabPackage elabPkg) = elabPkg
         projectElabComponent ~(ElabComponent elabComp) = elabComp
-
-instance Unjson ElaboratedComponent where
-    unjsonDef = objectOf gfieldDef'
-
-instance {-# INCOHERENT #-} Unjson (PkgconfigName, Maybe PkgconfigVersion) where
-    unjsonDef = objectOf gfieldDef'
 
 instance (Unjson a, Typeable a) => Unjson (PackageLocation (Maybe a)) where
     unjsonDef =
@@ -431,79 +648,8 @@ unjsonRepo =
             )
         ]
 
---
---
---
-
-newtype UnjsonPrettyParsec a = UnjsonPrettyParsec a
-
-deriving via (a :: Type) instance Pretty a => Pretty (UnjsonPrettyParsec a)
-
--- | NOTE: This does not work
--- deriving via a instance (Parsec a) => Parsec (UnjsonPrettyParsec a)
-instance Parsec a => Parsec (UnjsonPrettyParsec a) where
-    parsec = UnjsonPrettyParsec <$> parsec
-
-instance (Pretty a, Parsec a) => Unjson (UnjsonPrettyParsec a) where
-    unjsonDef = unjsonInvmapR (either fail return . eitherParsec) prettyShow unjsonDef
-
-newtype UnjsonShowRead a = UnjsonShowRead a
-
-deriving via (a :: Type) instance Show a => Show (UnjsonShowRead a)
-
-deriving via (a :: Type) instance Read a => Read (UnjsonShowRead a)
-
-instance (Show a, Read a) => Unjson (UnjsonShowRead a) where
-    unjsonDef = unjsonInvmapR (maybe (fail "cannot parse") return . readMaybe) show unjsonDef
-
-deriving via UnjsonShowRead (Maybe Bool) instance Unjson (Maybe Bool)
-
-deriving via UnjsonPrettyParsec ComponentId instance Unjson ComponentId
-
-deriving via UnjsonPrettyParsec ComponentName instance Unjson ComponentName
-
-deriving via UnjsonShowRead ComponentRequestedSpec instance Unjson ComponentRequestedSpec
-
-deriving via UnjsonPrettyParsec FlagAssignment instance Unjson FlagAssignment
-
-deriving via UnjsonPrettyParsec HaddockTarget instance Unjson HaddockTarget
-
-deriving via UnjsonPrettyParsec LocalRepo instance Unjson LocalRepo
-
-deriving via UnjsonPrettyParsec Module instance Unjson Module
-
-deriving via UnjsonPrettyParsec ModuleName instance Unjson ModuleName
-
-deriving via UnjsonPrettyParsec OpenModule instance Unjson OpenModule
-
-deriving via UnjsonPrettyParsec OpenUnitId instance Unjson OpenUnitId
-
-deriving via UnjsonPrettyParsec PackageName instance Unjson PackageName
-
-deriving via UnjsonPrettyParsec PackageId instance Unjson PackageId
-
-deriving via UnjsonShowRead PackageDB instance Unjson PackageDB
-
-deriving via UnjsonPrettyParsec PkgconfigName instance Unjson PkgconfigName
-
-deriving via UnjsonEnumeration OptimisationLevel instance Unjson OptimisationLevel
-
-deriving via UnjsonPrettyParsec PkgconfigVersion instance Unjson PkgconfigVersion
-
-deriving via UnjsonPrettyParsec RemoteRepo instance Unjson RemoteRepo
-
-deriving via UnjsonPrettyParsec RepoType instance Unjson RepoType
-
-deriving via UnjsonPrettyParsec TestShowDetails instance Unjson TestShowDetails
-
-deriving via UnjsonPrettyParsec UnitId instance Unjson UnitId
-
-deriving via UnjsonPrettyParsec Version instance Unjson Version
-
 instance Unjson OptionalStanzaSet where
     unjsonDef = invmap optStanzaSetFromList optStanzaSetToList unjsonDef
-
-deriving via UnjsonEnumeration OptionalStanza instance Unjson OptionalStanza
 
 instance Unjson (OptionalStanzaMap (Maybe Bool)) where
     unjsonDef = invmap optStanzaTabulate optStanzaIndex unjsonTotalMap
@@ -539,15 +685,6 @@ instance Unjson HashValue where
             -- so we can create an HashValue from the knowledge of its representation
             GHC.Generics.to . M1 . M1 . M1 . K1 <$> Base16.decode (C8.pack value)
 
-instance Unjson ConfiguredId where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson (SourceRepositoryPackage Maybe) where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson ElaboratedPackage where
-    unjsonDef = objectOf gfieldDef'
-
 instance (Monoid a, Typeable a, Unjson a) => Unjson (CD.ComponentDeps a) where
     unjsonDef = invmap CD.fromList CD.toList unjsonDef
 
@@ -558,8 +695,6 @@ instance Unjson ComponentTarget where
             (`ComponentTarget` WholeComponent)
             (\(ComponentTarget cn _) -> cn)
             unjsonDef
-
-deriving via UnjsonEnumeration BuildStyle instance Unjson BuildStyle
 
 instance Unjson TestSuiteInterface where
     unjsonDef =
@@ -587,87 +722,7 @@ instance Unjson TestSuiteInterface where
                 )
             ]
 
-deriving via UnjsonEnumeration LibraryVisibility instance Unjson LibraryVisibility
-
--- | FIXME
-deriving via UnjsonShowRead (Either Distribution.SPDX.License.License Distribution.License.License) instance Unjson (Either Distribution.SPDX.License.License Distribution.License.License)
-
-deriving via UnjsonPrettyParsec Distribution.SPDX.License.License instance Unjson Distribution.SPDX.License.License
-
-deriving via UnjsonPrettyParsec (SymbolicPath a b) instance Unjson (SymbolicPath a b)
-
-deriving via UnjsonPrettyParsec CompilerFlavor instance Unjson CompilerFlavor
-
-deriving via UnjsonPrettyParsec TestType instance Unjson TestType
-
-deriving via UnjsonPrettyParsec VersionRange instance Unjson VersionRange
-
-deriving via UnjsonPrettyParsec RepoKind instance Unjson RepoKind
-
-deriving via UnjsonPrettyParsec BuildType instance Unjson BuildType
-
-deriving via UnjsonPrettyParsec Dependency instance Unjson Dependency
-
-deriving via UnjsonPrettyParsec LegacyExeDependency instance Unjson LegacyExeDependency
-
-deriving via UnjsonPrettyParsec ExeDependency instance Unjson ExeDependency
-
-deriving via UnjsonPrettyParsec PkgconfigDependency instance Unjson PkgconfigDependency
-
-deriving via UnjsonPrettyParsec Language instance Unjson Language
-
-deriving via UnjsonPrettyParsec Extension instance Unjson Extension
-
-deriving via UnjsonPrettyParsec Mixin instance Unjson Mixin
-
-deriving via UnjsonPrettyParsec UnqualComponentName instance Unjson UnqualComponentName
-
-deriving via UnjsonPrettyParsec ExecutableScope instance Unjson ExecutableScope
-
-deriving via UnjsonPrettyParsec ForeignLibType instance Unjson ForeignLibType
-
-deriving via UnjsonPrettyParsec ForeignLibOption instance Unjson ForeignLibOption
-
-deriving via UnjsonPrettyParsec LibVersionInfo instance Unjson LibVersionInfo
-
-deriving via UnjsonShowRead BenchmarkInterface instance Unjson BenchmarkInterface
-
--- | FIXME
-deriving via UnjsonShowRead LibraryName instance Unjson LibraryName
-
 instance (Typeable v, Unjson v) => Unjson (PerCompilerFlavor v) where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson BuildInfo where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson ModuleReexport where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson Benchmark where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson TestSuite where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson ForeignLib where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson Library where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson SetupBuildInfo where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson SourceRepo where
-    unjsonDef = objectOf gfieldDef'
-
-deriving via UnjsonShowRead CabalSpecVersion instance Unjson CabalSpecVersion
-
-instance Unjson Executable where
-    unjsonDef = objectOf gfieldDef'
-
-instance Unjson PackageDescription where
     unjsonDef = objectOf gfieldDef'
 
 instance Unjson URI where
@@ -695,87 +750,6 @@ unjsonGenericAeson docstring options =
         (either fail return . Aeson.parseEither (Aeson.genericParseJSON options))
         (Aeson.genericToJSON options)
 
--- data    V1        p                       -- lifted version of Empty
--- data    U1        p = U1                  -- lifted version of ()
--- data    (:+:) f g p = L1 (f p) | R1 (g p) -- lifted version of Either
--- data    (:*:) f g p = (f p) :*: (g p)     -- lifted version of (,)
--- newtype K1    i c p = K1 { unK1 :: c }    -- a container for a c
--- newtype M1  i t f p = M1 { unM1 :: f p }  -- a wrapper
-
--- data ThingyResult = ThingyResult
---
--- class Thingy' f where
---   thingy' :: f p -> ThingyResult
---
--- instance Thingy' V1 where thingy' x = case x of {}
---
--- instance Thingy' U1 where thingy' _ = ThingyResult
---
--- instance Thingy'
-
-newtype UnjsonEnumeration a = UnjsonEnumeration a
-    deriving (Eq, Generic)
-
-instance
-    ( Eq a
-    , Constructors a
-    , GEnum StandardEnum (Rep a)
-    , GBounded (Rep a)
-    , GDatatype (Rep a)
-    )
-    => Unjson (UnjsonEnumeration a)
-    where
-    unjsonDef =
-        invmap coerce coerce $
-            enumOf @a
-                (T.pack $ gdatatypeName @a)
-                [(T.pack $ gconName bs, bs) | bs <- genumFromTo gminBound gmaxBound]
-
-unjsonTotalMap
-    :: ( Eq k
-       , Constructors k
-       , GEnum StandardEnum (Rep k)
-       , GBounded (Rep k)
-       , Typeable k
-       , Typeable a
-       , Unjson a
-       )
-    => UnjsonDef (k -> a)
-unjsonTotalMap = unjsonTotalMapBy unjsonDef
-
-unjsonTotalMapBy
-    :: ( Typeable a
-       , Eq k
-       , Typeable k
-       , (Constructors k, GEnum StandardEnum (Rep k), GBounded (Rep k))
-       )
-    => UnjsonDef a
-    -> UnjsonDef (k -> a)
-unjsonTotalMapBy def =
-    objectOf $ unsafeLookup <$> for allValues mkField
-  where
-    unsafeLookup l v =
-        fromJust (error "this should have never happened of course") $
-            Prelude.lookup v l
-
-    mkField v =
-        fieldBy
-            (T.pack $ gconName v)
-            (\f -> (v, f v))
-            (T.pack $ gconName v)
-            (invmap (v,) snd def)
-
-    allValues = genumFromTo gminBound gmaxBound
-
--- | This is encoded as a list of pairs
-mapOfBy
-    :: forall k v
-     . (Ord k, Typeable k, Unjson k, Typeable v, Unjson v)
-    => UnjsonDef (Map k v)
-mapOfBy =
-    invmap M.fromList M.toList $
-        arrayWithPrimaryKeyOf fst unjsonDef unjsonDef -- (unjsonTuple2By uk uv)
-
 -- -- | Workaround because TupleFieldDef is not exposed
 -- unjsonTuple2By :: UnjsonDef k -> UnjsonDef v -> UnjsonDef (k, v)
 -- unjsonTuple2By uk uv =
@@ -786,60 +760,56 @@ mapOfBy =
 
 main :: IO ()
 main = do
-    withCacheFile "dist-newstyle/cache/elaborated-plan" $ \case
-        Left err -> print err
-        Right (_monitorStateFileSet, k, Left err) -> do
-            print k
-            print err
-        Right (_monitorStateFileSet, k, Right v) -> do
-            let (projectConfig, localPackages, progSearchPath) = k :: (ProjectConfig, [PackageSpecifier UnresolvedSourcePackage], [FilePath])
-            let (elaboratedInstallPlan, elaboratedSharedConfig, totalIndexState, activeRepos) = v :: (ElaboratedInstallPlan, ElaboratedSharedConfig, TotalIndexState, ActiveRepos)
+    args <- getArgs
+    case commandParseArgs cmdUI True args of
+        CommandHelp help -> putStrLn (help "cabal-make-install-plan")
+        CommandList opts -> putStrLn $ "commandList" ++ show opts
+        CommandErrors errs -> putStrLn $ "commandErrors: " ++ show errs
+        CommandReadyToGo (mkflags, _commandParse) ->
+            let globalFlags = defaultGlobalFlags
+                flags@NixStyleFlags{configFlags} = mkflags (commandDefaultFlags cmdUI)
+                verbosity = fromFlagOrDefault Verbosity.normal (configVerbosity configFlags)
+                cliConfig = commandLineFlagsToProjectConfig globalFlags flags mempty
+             in makeInstallPlanAction verbosity cliConfig
 
-            putStrLn "-------------------- projectConfig --------------------"
-            print projectConfig
+cmdUI :: CommandUI (NixStyleFlags ())
+cmdUI =
+    CommandUI
+        { commandName = "make-install-plan"
+        , commandSynopsis = "It makes an install-plan"
+        , commandUsage = ("Usage: " ++)
+        , commandDescription = Nothing
+        , commandNotes = Nothing
+        , commandDefaultFlags = defaultNixStyleFlags ()
+        , commandOptions = nixStyleOptions (const [])
+        }
 
-            putStrLn "-------------------- localPackages --------------------"
-            print localPackages
+-- The following is adapted from cabal-install's Distribution.Client.CmdFreeze
+makeInstallPlanAction :: Verbosity -> ProjectConfig -> IO ()
+makeInstallPlanAction verbosity cliConfig = do
+    ProjectBaseContext{distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
+        establishProjectBaseContext verbosity cliConfig OtherCommand
 
-            putStrLn "-------------------- progSearchPath --------------------"
-            print progSearchPath
+    (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
+        rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages Nothing
 
-            putStrLn "-------------------- elaboratedInstallPlan --------------------"
-            print $ toList elaboratedInstallPlan
+    -- putStrLn "-------------------- projectConfig --------------------"
+    -- printJson projectConfig
 
-            putStrLn "-------------------- elaboratedSharedConfig --------------------"
-            print elaboratedSharedConfig
+    -- putStrLn "-------------------- localPackages --------------------"
+    -- printJson localPackages
 
-            putStrLn "-------------------- totalIndexState --------------------"
-            print totalIndexState
+    putStrLn "-------------------- elaboratedInstallPlan --------------------"
+    for_ (toList elaboratedPlan) printJson
 
-            putStrLn "-------------------- activeRepos --------------------"
-            print activeRepos
+    -- putStrLn "-------------------- elaboratedSharedConfig --------------------"
+    -- printJson elaboratedSharedConfig
 
-withCacheFile
-    :: (Binary a, Structured a, Binary b, Structured b)
-    => FilePath
-    -> (Either String (MonitorStateFileSet, a, Either String b) -> IO r)
-    -> IO r
-withCacheFile cacheFile k =
-    withBinaryFile cacheFile ReadMode $ \hnd -> do
-        contents <- structuredDecodeTriple <$> BL.hGetContents hnd
-        k contents
+    putStrLn "-------------------- totalIndexState --------------------"
+    printJson totalIndexState
 
-structuredDecodeTriple
-    :: forall a b c
-     . (Structured a, Structured b, Structured c, Binary a, Binary b, Binary c)
-    => BL.ByteString
-    -> Either String (a, b, Either String c)
-structuredDecodeTriple lbs =
-    let partialDecode =
-            (`runGetOrFail` lbs) $ do
-                (_ :: Tag (a, b, c)) <- get
-                (a :: a) <- get
-                (b :: b) <- get
-                pure (a, b)
-        cleanEither (Left (_, pos, msg)) = Left ("Data.Binary.Get.runGet at position " ++ show pos ++ ": " ++ msg)
-        cleanEither (Right (_, _, v)) = Right v
-     in case partialDecode of
-            Left (_, pos, msg) -> Left ("Data.Binary.Get.runGet at position " ++ show pos ++ ": " ++ msg)
-            Right (lbs', _, (x, y)) -> Right (x, y, cleanEither $ runGetOrFail (get :: Get c) lbs')
+    putStrLn "-------------------- activeRepos --------------------"
+    printJson activeRepos
+
+printJson :: Unjson a => a -> IO ()
+printJson = BL.putStr . unjsonToByteStringLazy' (Options{pretty = True, indent = 2, nulls = True}) unjsonDef
