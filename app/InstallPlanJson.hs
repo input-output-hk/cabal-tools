@@ -68,6 +68,7 @@ import Data.Unjson (
     unjsonInvmapR,
     unjsonToByteStringLazy',
     unjsonToJSON,
+    unjsonToJSON',
  )
 
 import Distribution.Backpack (OpenModule, OpenUnitId)
@@ -116,7 +117,7 @@ import Distribution.Simple (
     VersionRange,
  )
 import Distribution.Simple.Command (CommandParse (..), CommandUI (..), commandParseArgs)
-import Distribution.Simple.Compiler (PackageDB)
+import Distribution.Simple.Compiler (AbiTag, Compiler, CompilerFlag, CompilerId, PackageDB)
 import Distribution.Simple.InstallDirs (
     InstallDirs,
     PathTemplate,
@@ -221,7 +222,10 @@ import System.Environment
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import Text.Read (readMaybe)
 
+import Data.Aeson.Text qualified as Aeson
+import Data.Text.Lazy.IO qualified as TL
 import Distribution.Client.Types.RepoName
+import Distribution.System
 import Distribution.Types.InstalledPackageInfo
 import Text.Pretty.Simple (CheckColorTty (NoCheckColorTty), OutputOptions (outputOptionsCompact, outputOptionsCompactParens), defaultOutputOptionsDarkBg, pPrintOpt)
 
@@ -254,6 +258,7 @@ instance GFieldDef' f => GFieldDef' (C1 t f) where
 
 data HProxy s (f :: Type -> Type) a = HProxy
 
+-- FIXME: selector names can be null
 instance {-# OVERLAPPING #-} (Typeable c, Unjson c, Selector t) => GFieldDef' (S1 t (K1 i (Maybe c))) where
     gFieldDef' = M1 . K1 <$> hoistAp (contramapFieldDef (unK1 . unM1)) (fieldOpt name id name)
       where
@@ -403,10 +408,14 @@ deriving via UnjsonObject (SourceRepositoryPackage Maybe) instance Unjson (Sourc
 deriving via UnjsonObject (SourceRepositoryPackage []) instance Unjson (SourceRepositoryPackage [])
 deriving via UnjsonObject Benchmark instance Unjson Benchmark
 deriving via UnjsonObject BuildInfo instance Unjson BuildInfo
+deriving via UnjsonObject Compiler instance Unjson Compiler
+deriving via UnjsonObject CompilerId instance Unjson CompilerId
 deriving via UnjsonObject ConfiguredId instance Unjson ConfiguredId
 deriving via UnjsonObject ElaboratedComponent instance Unjson ElaboratedComponent
 deriving via UnjsonObject ElaboratedConfiguredPackage instance Unjson ElaboratedConfiguredPackage
 deriving via UnjsonObject ElaboratedPackage instance Unjson ElaboratedPackage
+
+-- deriving via UnjsonObject ElaboratedSharedConfig instance Unjson ElaboratedSharedConfig
 deriving via UnjsonObject Executable instance Unjson Executable
 deriving via UnjsonObject ForeignLib instance Unjson ForeignLib
 deriving via UnjsonObject InstalledPackageInfo instance Unjson InstalledPackageInfo
@@ -425,6 +434,7 @@ deriving via UnjsonPrettyParsec ActiveRepos instance Unjson ActiveRepos
 deriving via UnjsonPrettyParsec (SymbolicPath a b) instance Unjson (SymbolicPath a b)
 deriving via UnjsonPrettyParsec AbiDependency instance Unjson AbiDependency
 deriving via UnjsonPrettyParsec AbiHash instance Unjson AbiHash
+deriving via UnjsonPrettyParsec AbiTag instance Unjson AbiTag
 deriving via UnjsonPrettyParsec BuildType instance Unjson BuildType
 deriving via UnjsonPrettyParsec CompilerFlavor instance Unjson CompilerFlavor
 deriving via UnjsonPrettyParsec ComponentId instance Unjson ComponentId
@@ -450,6 +460,7 @@ deriving via UnjsonPrettyParsec OpenModule instance Unjson OpenModule
 deriving via UnjsonPrettyParsec OpenUnitId instance Unjson OpenUnitId
 deriving via UnjsonPrettyParsec PackageId instance Unjson PackageId
 deriving via UnjsonPrettyParsec PackageName instance Unjson PackageName
+deriving via UnjsonPrettyParsec Platform instance Unjson Platform
 deriving via UnjsonPrettyParsec PkgconfigDependency instance Unjson PkgconfigDependency
 deriving via UnjsonPrettyParsec PkgconfigName instance Unjson PkgconfigName
 deriving via UnjsonPrettyParsec PkgconfigVersion instance Unjson PkgconfigVersion
@@ -465,6 +476,7 @@ deriving via UnjsonPrettyParsec UnqualComponentName instance Unjson UnqualCompon
 deriving via UnjsonPrettyParsec Version instance Unjson Version
 deriving via UnjsonPrettyParsec VersionRange instance Unjson VersionRange
 deriving via UnjsonShowRead (Maybe Bool) instance Unjson (Maybe Bool)
+deriving via UnjsonShowRead (Maybe CompilerFlag) instance Unjson (Maybe CompilerFlag)
 deriving via UnjsonShowRead BenchmarkInterface instance Unjson BenchmarkInterface
 deriving via UnjsonShowRead CabalSpecVersion instance Unjson CabalSpecVersion
 deriving via UnjsonShowRead PackageDB instance Unjson PackageDB
@@ -509,7 +521,7 @@ instance Unjson ElaboratedPlanPackage where
     unjsonDef =
         disjointUnionOf
             "ElaboratedPlanPackage"
-            [ gConst "PreExisting" "PreExisting" PreExisting (\case ~(PreExisting ipkg) -> ipkg)
+            [ gConst "PreExisting" "PreExisting" PreExisting (\case ~(PreExisting pkg) -> pkg)
             , gConst "Configured" "Configured" Configured (\case ~(Configured pkg) -> pkg)
             , gConst "Installed" "Installed" Installed (\case ~(Installed pkg) -> pkg)
             ]
@@ -518,22 +530,9 @@ instance Unjson ElaboratedPackageOrComponent where
     unjsonDef =
         disjointUnionOf
             "ElaboratedPackageOrComponent"
-            [
-                ( "ElabPackage"
-                , (== "ElabPackage") . gconName
-                , ElabPackage
-                    <$> field "ElabPackage" projectElabPackage "ElabPackage"
-                )
-            ,
-                ( "ElabComponent"
-                , (== "ElabComponent") . gconName
-                , ElabComponent
-                    <$> field "ElabComponent" projectElabComponent "ElabComponent"
-                )
+            [ gConst "ElabPackage" "ElabPackage" ElabPackage (\case ~(ElabPackage pkg) -> pkg)
+            , gConst "ElabComponent" "ElabComponent" ElabComponent (\case ~(ElabComponent pkg) -> pkg)
             ]
-      where
-        projectElabPackage ~(ElabPackage elabPkg) = elabPkg
-        projectElabComponent ~(ElabComponent elabComp) = elabComp
 
 instance (Unjson a, Typeable a) => Unjson (PackageLocation (Maybe a)) where
     unjsonDef =
@@ -790,7 +789,7 @@ makeInstallPlanAction verbosity cliConfig = do
     ProjectBaseContext{distDirLayout, cabalDirLayout, projectConfig, localPackages} <-
         establishProjectBaseContext verbosity cliConfig OtherCommand
 
-    (_improvedPlan, elaboratedPlan, elaboratedSharedConfig, totalIndexState, activeRepos) <-
+    (_improvedPlan, elaboratedPlan, _elaboratedSharedConfig, totalIndexState, activeRepos) <-
         rebuildInstallPlan verbosity distDirLayout cabalDirLayout projectConfig localPackages Nothing
 
     -- putStrLn "-------------------- projectConfig --------------------"
@@ -798,18 +797,14 @@ makeInstallPlanAction verbosity cliConfig = do
 
     -- putStrLn "-------------------- localPackages --------------------"
     -- printJson localPackages
-
-    putStrLn "-------------------- elaboratedInstallPlan --------------------"
-    for_ (toList elaboratedPlan) printJson
-
-    -- putStrLn "-------------------- elaboratedSharedConfig --------------------"
-    -- printJson elaboratedSharedConfig
-
-    putStrLn "-------------------- totalIndexState --------------------"
-    printJson totalIndexState
-
-    putStrLn "-------------------- activeRepos --------------------"
-    printJson activeRepos
+    --
+    TL.putStrLn $
+        Aeson.encodeToLazyText $
+            Aeson.object
+                [ "elaboratedPlan" Aeson..= map (unjsonToJSON unjsonDef) (toList elaboratedPlan)
+                , "totalIndexState" Aeson..= unjsonToJSON unjsonDef totalIndexState
+                , "activeRepos" Aeson..= unjsonToJSON unjsonDef activeRepos
+                ]
 
 printJson :: Unjson a => a -> IO ()
 printJson = BL.putStr . unjsonToByteStringLazy' (Options{pretty = True, indent = 2, nulls = True}) unjsonDef
