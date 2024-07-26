@@ -8,144 +8,46 @@ build-type:      Simple
 extra-doc-files: CHANGELOG.md
 
 common warnings
-    ghc-options: -Wall
-
-executable cabal-install-plan
-    import:           warnings
-    main-is:          InstallPlan.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , bytestring
-                    , containers
-                    , directory
-                    , filepath
-                    , Cabal                ^>= 3.10.0.0
-                    , Cabal-syntax         ^>= 3.10.0.0
-                    , cabal-install        ^>= 3.10.0.0
-                    , cabal-install-solver ^>= 3.10.0.0
-                    , hackage-security
-                    , network-uri
-                    , zlib
-    hs-source-dirs:   app
-    default-language: GHC2021
-
-executable cabal-project-config
-    import:           warnings
-    main-is:          ProjectConfig.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , aeson
-                    , Cabal
-                    , Cabal-syntax
-                    , cabal-install
-                    , cabal-install-solver
-                    , prettyprinter
-                    , pretty-simple
-                    , aeson
-                    , invariant
-                    , text
-                    , unjson
-    hs-source-dirs:   app
-    default-language: GHC2021
-
-executable cabal-builder
-    import:           warnings
-    main-is:          Builder.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , aeson
-                    , Cabal                ^>= 3.10.0.0
-                    , Cabal-syntax         ^>= 3.10.0.0
-                    , cabal-install        ^>= 3.10.0.0
-                    , cabal-install-solver ^>= 3.10.0.0
-                    , containers
-                    , directory
-                    , optparse-applicative
-                    , prettyprinter
-                    , process
-    hs-source-dirs:   app
-    default-language: GHC2021
-
-
-executable cabal-available-packages
-    import:           warnings
-    main-is:          AvailablePackages.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , aeson
-                    , bytestring
-                    , Cabal
-                    , Cabal-syntax
-                    , cabal-install
-                    , cabal-install-solver
-                    , prettyprinter
-                    , pretty-simple
-                    , text
-    hs-source-dirs:   app
-    default-language: GHC2021
-
-executable cabal-gen-bounds
-    import:           warnings
-    main-is:          GenBounds.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , containers
-                    , filepath
-                    , Cabal                ^>= 3.10.0.0
-                    , cabal-install        ^>= 3.10.0.0
-                    , cabal-install-solver ^>= 3.10.0.0
-                    , Cabal-syntax         ^>= 3.10.0.0
-    hs-source-dirs:   app
-    default-language: GHC2021
+    ghc-options: -Wall -Wno-orphans
 
 executable cabal-install-plan-json
     import:           warnings
     main-is:          InstallPlanJson.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , base16-bytestring
-                    , binary
-                    , bytestring
-                    , containers
-                    , filepath
-                    , Cabal                ^>= 3.10.0.0
-                    , cabal-install        ^>= 3.10.0.0
-                    , cabal-install-solver ^>= 3.10.0.0
-                    , Cabal-syntax         ^>= 3.10.0.0
-                    , text
-    build-depends:    aeson
-                    , free
-                    , generic-data
-                    , generic-deriving
-                    , invariant
-                    , microlens
-                    , network-uri
-                    , pretty-simple
-                    , unjson
+    other-modules:
+      Distribution.Backpack.Json
+      Distribution.Simple.Json
+      Distribution.Solver.Json
+      Distribution.Client.Json
+      Distribution.Json
+      Distribution.License.Json
+      Distribution.Types.Json
+      Distribution.Utils.Json
+      Network.Json
+      Unjson
+    build-depends:
+        base                  >= 4.14.3.0
+      , aeson
+      , base16-bytestring
+      , binary
+      , bytestring
+      , Cabal
+      , cabal-install
+      , cabal-install-solver
+      , Cabal-syntax
+      , containers
+      , filepath
+      , free
+      , generic-data
+      , generic-deriving
+      , invariant
+      , microlens
+      , network-uri
+      , pretty-simple
+      , text
+      , unjson
     hs-source-dirs:   app
     default-language: GHC2021
-
-executable cabal-active-bounds
-    import:           warnings
-    main-is:          ActiveBounds.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , binary
-                    , bytestring
-                    , containers
-                    , filepath
-                    , Cabal                ^>= 3.10.0.0
-                    , cabal-install        ^>= 3.10.0.0
-                    , cabal-install-solver ^>= 3.10.0.0
-                    , Cabal-syntax         ^>= 3.10.0.0
-    hs-source-dirs:   app
-    default-language: GHC2021
-
-executable cabal-project-building
-    import:           warnings
-    main-is:          ProjectBuilding.hs
-    build-depends:    base                  >= 4.14.3.0
-                    , binary
-                    , bytestring
-                    , containers
-                    , directory
-                    , filepath
-                    , Cabal                ^>= 3.10.0.0
-                    , cabal-install        ^>= 3.10.0.0
-                    , cabal-install-solver ^>= 3.10.0.0
-                    , Cabal-syntax         ^>= 3.10.0.0
-    hs-source-dirs:   app
-    default-language: GHC2021
+    default-extensions:
+        DerivingVia
+      , LambdaCase
+      , OverloadedStrings
