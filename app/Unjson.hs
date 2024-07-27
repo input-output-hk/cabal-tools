@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -18,6 +17,7 @@ import Data.Traversable
 import Data.Typeable
 import GHC.Generics
 import Text.Read
+import Type.Reflection hiding (typeRep)
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
@@ -34,6 +34,10 @@ import Data.Aeson.Types qualified as Aeson
 import Data.Unjson
 import Generic.Data
 
+--
+-- FieldDef
+--
+
 -- Note: contramapFieldDef is basically contramap, but due to type parameters
 -- in wrong order we would need to do some type shuffling to get it right.
 -- Easier to just write it here as it is.
@@ -46,51 +50,51 @@ contramapFieldDef f (FieldRODef name doc ext d) = FieldRODef name doc (ext . f) 
 dimapApFieldDef :: (t -> s) -> (a -> b) -> Ap (FieldDef s) a -> Ap (FieldDef t) b
 dimapApFieldDef f g = fmap g . hoistAp (contramapFieldDef f)
 
--- class FieldDef' a where
---     fieldDef' :: Ap (FieldDef a) a
---     default fieldDef' :: (Generic a, GFieldDef' (Rep a)) => Ap (FieldDef a) a
---     fieldDef' = gfieldDef'
-
 genericFieldDef :: (Generic a, GFieldDef (Rep a)) => Ap (FieldDef a) a
 genericFieldDef = dimapApFieldDef from to gFieldDef
-
-data HProxy s (f :: Type -> Type) a = HProxy
 
 class GFieldDef f where
     gFieldDef :: Ap (FieldDef (f p)) (f p)
 
-instance GFieldDef (D1 (c :: Meta) f) where
-    gFieldDef = dimapApFieldDef unM1 M1 $ gFieldDef'C HProxy
+instance GFieldDef'C f => GFieldDef (D1 (d :: Meta) f) where
+    gFieldDef = dimapApFieldDef unM1 M1 gFieldDef'C
 
-instance GFieldDef f => GFieldDef (C1 (c :: Meta) f) where
-    gFieldDef = dimapApFieldDef unM1 M1 gFieldDef
+class GFieldDef'C f where
+    gFieldDef'C :: Ap (FieldDef (f p)) (f p)
 
-instance GFieldDef f => GFieldDef (S1 (c :: Meta) f) where
-    gFieldDef = dimapApFieldDef unM1 M1 gFieldDef
-
-instance GFieldDef (Rec0 c) where
-    gFieldDef :: forall k c (p :: k). Ap (FieldDef (Rec0 c p)) (Rec0 c p)
-    gFieldDef = undefined
-
--- -- FIXME: selector names can be null
--- instance {-# OVERLAPPING #-} (Typeable c, Unjson c, Selector t) => GFieldDef' (S1 t (K1 i (Maybe c))) where
---     gFieldDef' = M1 . K1 <$> hoistAp (contramapFieldDef (unK1 . unM1)) (fieldOpt name id name)
---       where
---         name = T.pack $ selName (HProxy :: HProxy t f a)
-
--- instance (Typeable c, Unjson c, Selector t) => GFieldDef' (S1 t (K1 i c)) where
---     gFieldDef' = M1 . K1 <$> hoistAp (contramapFieldDef (unK1 . unM1)) (field name id name)
---       where
---         name = T.pack $ selName (HProxy :: HProxy t f a)
-
-instance (GFieldDef l, GFieldDef r) => GFieldDef (l :*: r) where
-    gFieldDef :: Ap (FieldDef ((l :*: r) p)) ((l :*: r) p)
-    gFieldDef = liftA2 (:*:) l r
+instance (GFieldDef'S f, Constructor m) => GFieldDef'C (C1 m f) where
+    gFieldDef'C = dimapApFieldDef unM1 M1 $ gFieldDef'S cn
       where
-        l = hoistAp (contramapFieldDef fst') gFieldDef
-        r = hoistAp (contramapFieldDef snd') gFieldDef
+        cn = T.pack $ conName (undefined :: t m f a)
+
+class GFieldDef'S f where
+    gFieldDef'S :: T.Text -> Ap (FieldDef (f p)) (f p)
+
+instance (GFieldDef'K f, Selector m) => GFieldDef'S (S1 m f) where
+    gFieldDef'S cn = dimapApFieldDef unM1 M1 $ gFieldDef'K cn sn
+      where
+        sn = T.pack $ selName (undefined :: t m f a)
+
+instance (GFieldDef'S l, GFieldDef'S r) => GFieldDef'S (l :*: r) where
+    gFieldDef'S cn = liftA2 (:*:) l r
+      where
+        l = hoistAp (contramapFieldDef fst') (gFieldDef'S cn)
+        r = hoistAp (contramapFieldDef snd') (gFieldDef'S cn)
         fst' (f :*: _) = f
         snd' (_ :*: g) = g
+
+class GFieldDef'K f where
+    gFieldDef'K :: T.Text -> T.Text -> Ap (FieldDef (f p)) (f p)
+
+instance {-# OVERLAPPABLE #-} (Unjson a, Typeable a) => GFieldDef'K (K1 i a) where
+    gFieldDef'K _cn sn = dimapApFieldDef unK1 K1 $ field sn' id sn
+      where
+        sn'
+            | sn == "" = T.pack $ tyConName $ someTypeRepTyCon $ typeRep (Proxy :: Proxy a)
+            | otherwise = sn
+
+instance {-# OVERLAPPING #-} (Unjson a, Typeable a) => GFieldDef'K (K1 i (Maybe a)) where
+    gFieldDef'K _cn sn = dimapApFieldDef unK1 K1 $ fieldOpt sn id sn
 
 newtype UnjsonObject a = UnjsonObject a
 

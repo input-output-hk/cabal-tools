@@ -13,16 +13,11 @@ import Distribution.Types.LocalBuildConfig
 import Data.Aeson qualified as Aeson
 import Unjson
 
-import Control.Applicative.Free
-import Data.Text qualified as T
 import Distribution.Types.Json ()
 import GHC.Generics
 
--- FIXME: selector names can be null
-instance {-# OVERLAPPING #-} (Typeable c, Unjson c, Selector t) => GFieldDef (S1 t (K1 i (Flag c))) where
-    gFieldDef = M1 . K1 <$> hoistAp (contramapFieldDef (flagToMaybe . unK1 . unM1)) (maybeToFlag <$> fieldOpt name id name)
-      where
-        name = T.pack $ selName (HProxy :: HProxy t f a)
+instance {-# OVERLAPPING #-} (Unjson a, Typeable a) => GFieldDef'K (K1 i (Flag a)) where
+    gFieldDef'K _cn sn = dimapApFieldDef unK1 K1 $ dimapApFieldDef flagToMaybe maybeToFlag $ fieldOpt sn id sn
 
 deriving via UnjsonShowRead PackageDB instance Unjson PackageDB
 
