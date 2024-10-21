@@ -1,9 +1,0 @@
-with-compiler: ghc-9.8
-
-packages: .
-
-constraints:
-    Cabal                ==3.12.1.0
-  , Cabal-syntax         ==3.12.1.0
-  , cabal-install        ==3.12.1.0
-  , cabal-install-solver ==3.12.1.0

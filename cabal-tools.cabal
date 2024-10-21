@@ -10,9 +10,17 @@ extra-doc-files: CHANGELOG.md
 common warnings
     ghc-options: -Wall -Wno-orphans
 
+common dependencies
+    build-depends:
+      , Cabal                ^>=3.12
+      , Cabal-syntax         ^>=3.12
+      , cabal-install        ^>=3.12
+      , cabal-install-solver ^>=3.12
+
 executable cabal-install-plan-json
     import:           warnings
-    main-is:          InstallPlanJson.hs
+                    , dependencies
+    main-is:          Main.hs
     other-modules:
       Distribution.Backpack.Json
       Distribution.Simple.Json
@@ -25,15 +33,11 @@ executable cabal-install-plan-json
       Network.Json
       Unjson
     build-depends:
-        base                  >= 4.14.3.0
+        base                  >=4.14
       , aeson
       , base16-bytestring
       , binary
       , bytestring
-      , Cabal
-      , cabal-install
-      , cabal-install-solver
-      , Cabal-syntax
       , containers
       , filepath
       , free
@@ -42,7 +46,6 @@ executable cabal-install-plan-json
       , invariant
       , microlens
       , network-uri
-      , pretty-simple
       , text
       , unjson
     hs-source-dirs:   app
@@ -51,3 +54,4 @@ executable cabal-install-plan-json
         DerivingVia
       , LambdaCase
       , OverloadedStrings
+      , ExplicitNamespaces
